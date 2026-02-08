@@ -118,7 +118,7 @@ cmd(
 
         const buf = await st.toBuffer();
         await maliya.sendMessage(from, { sticker: buf }, { quoted: mek });
-        return reply("✅ Rounded sticker created!");
+        return reply("✅ Rounded sticker created!.");
       }
 
 
