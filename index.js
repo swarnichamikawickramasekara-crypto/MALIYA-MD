@@ -22,6 +22,9 @@ const { sms } = require("./lib/msg");
 const { File } = require("megajs");
 const { commands, replyHandlers } = require("./command");
 
+// ✅ ADD: auto msg plugin (GEMINI_API_KEY2 uses in plugin)
+const autoMsgPlugin = require("./plugins/auto_msg.js");
+
 const app = express();
 const port = process.env.PORT || 8000;
 
@@ -64,7 +67,7 @@ async function ensureSessionFile() {
 /* ================= PLUGINS ================= */
 const antiDeletePlugin = require("./plugins/antidelete.js");
 global.pluginHooks = global.pluginHooks || [];
-global.pluginHooks.push(antiDeletePlugin);
+global.pluginHooks.push(antiDeletePlugin); // ✅ keep as-is
 
 /* ================= CONNECT ================= */
 async function connectToWA() {
@@ -181,7 +184,7 @@ async function connectToWA() {
           ? mek.message.ephemeralMessage.message
           : mek.message;
 
-      // ✅ plugins onMessage
+      // ✅ plugins onMessage (keep as-is)  [antidelete etc.]
       if (global.pluginHooks) {
         for (const plugin of global.pluginHooks) {
           if (plugin.onMessage) {
@@ -336,6 +339,28 @@ async function connectToWA() {
       const isOwner = ownerNumber.includes(senderNumber);
 
       const reply = (text) => sock.sendMessage(from, { text }, { quoted: mek });
+
+      // ✅ ADD: call auto-msg plugin ONLY here (so status won't trigger)
+      try {
+        if (autoMsgPlugin && typeof autoMsgPlugin.onMessage === "function") {
+          await autoMsgPlugin.onMessage(sock, mek, m, {
+            from,
+            body,
+            args,
+            q,
+            sender,
+            senderNumber,
+            isGroup,
+            isOwner,
+            reply,
+            isCmd,
+            commandName,
+            prefix,
+          });
+        }
+      } catch (e) {
+        console.log("AutoMsg hook error:", e?.message || e);
+      }
 
       // ===================== REPLY HANDLERS (NO PREFIX) =====================
       if (!isCmd && replyHandlers && replyHandlers.length) {
