@@ -1,4 +1,4 @@
-const { cmd, replyHandlers } = require("../command");
+const { cmd } = require("../command");
 const { ytmp3 } = require("sadaslk-dlcore");
 const yts = require("yt-search");
 const fs = require("fs");
@@ -27,6 +27,21 @@ function isGroupJid(jid = "") {
 }
 
 /* ================= HELPERS ================= */
+
+function getBodyFromMek(mek) {
+  const msg = mek?.message || {};
+  return (
+    msg.conversation ||
+    msg.extendedTextMessage?.text ||
+    msg.imageMessage?.caption ||
+    msg.videoMessage?.caption ||
+    ""
+  );
+}
+
+function getSenderJid(sock, mek) {
+  return mek.key?.fromMe ? sock.user?.id : (mek.key?.participant || mek.key?.remoteJid);
+}
 
 async function downloadFile(url, filePath) {
   const writer = fs.createWriteStream(filePath);
@@ -101,7 +116,7 @@ async function sendSongToGroup(bot, quoted, target, video) {
   );
 
   const data = await ytmp3(video.url);
-  if (!data?.url) throw new Error("MP3 download failed.");
+  if (!data?.url) throw new Error("MP3 download failed (missing url).");
 
   const filePath = path.join(__dirname, `${Date.now()}.mp3`);
   await downloadFile(data.url, filePath);
@@ -121,18 +136,14 @@ async function sendSongToGroup(bot, quoted, target, video) {
 
 /* ================= PENDING ================= */
 
-const pending = {}; // pending[sender] = { video, groups, from, createdAt }
+const pending = {}; // pending[senderJid] = { video, groups, from, createdAt }
 const TTL = 2 * 60 * 1000;
 
-/* ================= SAVE GROUP ================= */
+/* ================= COMMANDS: GROUP TARGET MGMT ================= */
 
+// Add current group
 cmd(
-  { pattern: "ctarget",
-   react: "🎯",
-   category: "config",
-   filename: __filename },
-
-  
+  { pattern: "ctarget", react: "🎯", category: "config", filename: __filename },
   async (bot, mek, m, { from, reply }) => {
     try {
       if (!isGroupJid(from)) return reply("Use this command inside a group.");
@@ -152,41 +163,68 @@ cmd(
   }
 );
 
-/* ================= LIST (OPTIONAL) ================= */
-
+// List groups
 cmd(
-  { 
-    
-   pattern: "ctargetlist",
-   react: "📋",
-   category: "config",
-   filename: __filename 
-  
-  },
-
-  
+  { pattern: "ctargetlist", react: "📋", category: "config", filename: __filename },
   async (bot, mek, m, { reply }) => {
-    const store = readStore();
-    if (!store.groups.length) return reply("No target groups saved.");
-    const names = await Promise.all(store.groups.map((g) => getGroupName(bot, g)));
-    const lines = names.map((n, i) => `${i + 1}. ${n}`).join("\n");
-    return reply(`Saved target groups:\n\n${lines}`);
+    try {
+      const store = readStore();
+      if (!store.groups.length) return reply("No target groups saved.");
+
+      const names = await Promise.all(store.groups.map((g) => getGroupName(bot, g)));
+      const lines = names.map((n, i) => `${i + 1}. ${n}`).join("\n");
+      return reply(`Saved target groups:\n\n${lines}\n\nRemove: .ctargetdel <number>\nClear: .ctargetclear`);
+    } catch (e) {
+      console.log(e);
+      return reply("Error listing target groups.");
+    }
   }
 );
 
-/* ================= CSONG (PREVIEW FIRST) ================= */
+// Delete group by number
+cmd(
+  { pattern: "ctargetdel", alias: ["ctargetremove"], react: "🗑️", category: "config", filename: __filename },
+  async (bot, mek, m, { q, reply }) => {
+    try {
+      const store = readStore();
+      if (!store.groups.length) return reply("No target groups saved.");
+
+      const num = parseInt((q || "").trim(), 10);
+      if (!num || num < 1 || num > store.groups.length) {
+        return reply(`Usage: .ctargetdel <number>\nExample: .ctargetdel 2`);
+      }
+
+      const removed = store.groups.splice(num - 1, 1)[0];
+      writeStore(store);
+
+      const name = await getGroupName(bot, removed);
+      return reply(`Removed target group: *${name}*`);
+    } catch (e) {
+      console.log(e);
+      return reply("Error removing target group.");
+    }
+  }
+);
+
+// Clear all groups
+cmd(
+  { pattern: "ctargetclear", react: "🧹", category: "config", filename: __filename },
+  async (bot, mek, m, { reply }) => {
+    try {
+      writeStore({ groups: [] });
+      return reply("All target groups cleared.");
+    } catch (e) {
+      console.log(e);
+      return reply("Error clearing target groups.");
+    }
+  }
+);
+
+/* ================= CSONG ================= */
 
 cmd(
-  { 
-    
-    
-    pattern: "csong",
-    react: "🎵",
-    category: "download",
-    filename: __filename
-  
-  },
-  async (bot, mek, m, { from, q, reply }) => {
+  { pattern: "csong", react: "🎵", category: "download", filename: __filename },
+  async (bot, mek, m, { from, q, reply, sender }) => {
     try {
       const store = readStore();
       const groups = store.groups || [];
@@ -196,30 +234,25 @@ cmd(
       const video = await getYoutube(q);
       if (!video) return reply("No results found.");
 
-      // Preview to the chat where command is used (inbox/group)
+      // Preview to command chat
       await bot.sendMessage(
         from,
         {
           image: { url: video.thumbnail },
-          caption: makeBeautifulCaption(
-            video,
-            "Reply with a group number to send. Reply *0* to cancel."
-          ),
+          caption: makeBeautifulCaption(video, "Reply with a group number to send. Reply *0* to cancel."),
         },
         { quoted: mek }
       );
 
-      // If only one group saved -> send directly
       if (groups.length === 1) {
         await sendSongToGroup(bot, mek, groups[0], video);
         return reply("Sent to the saved target group.");
       }
 
-      // If multiple -> show list and wait for number (NO SEND YET)
       const names = await Promise.all(groups.map((g) => getGroupName(bot, g)));
       const list = names.map((n, i) => `${i + 1}. ${n}`).join("\n");
 
-      pending[mek.sender] = { video, groups, from, createdAt: Date.now() };
+      pending[sender] = { video, groups, from, createdAt: Date.now() };
 
       return reply(`Select a target group number (1-${groups.length}) or reply 0 to cancel:\n\n${list}`);
     } catch (e) {
@@ -229,44 +262,52 @@ cmd(
   }
 );
 
-/* ================= NUMBER SELECT (NO PREFIX) ================= */
-/**
- * This is the IMPORTANT FIX:
- * Your index.js will route "1"/"0" to replyHandlers (no prefix).
- */
-replyHandlers.push({
-  react: "✅",
-  filter: (body, { sender, from }) => {
-    const p = pending[sender];
-    if (!p) return false;
-    if (p.from !== from) return false;
-    if (Date.now() - p.createdAt > TTL) return false;
-    return /^\d+$/.test((body || "").trim());
-  },
-  function: async (bot, mek, m, { from, body, sender, reply }) => {
-    try {
-      const p = pending[sender];
-      if (!p) return;
+/* ================= NUMBER REPLY (NO PREFIX) ================= */
 
-      const num = parseInt((body || "").trim(), 10);
+global.pluginHooks = global.pluginHooks || [];
+global.pluginHooks.push({
+  onMessage: async (bot, mek) => {
+    try {
+      const from = mek.key?.remoteJid;
+      if (!from || from === "status@broadcast") return;
+
+      const body = (getBodyFromMek(mek) || "").trim();
+      if (!/^\d+$/.test(body)) return;
+
+      const senderJid = getSenderJid(bot, mek);
+      if (!senderJid) return;
+
+      const p = pending[senderJid];
+      if (!p) return;
+      if (p.from !== from) return;
+
+      if (Date.now() - p.createdAt > TTL) {
+        delete pending[senderJid];
+        await bot.sendMessage(from, { text: "Selection expired. Please run .csong again." }, { quoted: mek });
+        return;
+      }
+
+      const num = parseInt(body, 10);
 
       if (num === 0) {
-        delete pending[sender];
-        return reply("Cancelled.");
+        delete pending[senderJid];
+        await bot.sendMessage(from, { text: "Cancelled." }, { quoted: mek });
+        return;
       }
 
       if (num < 1 || num > p.groups.length) {
-        return reply(`Invalid number. Reply 1-${p.groups.length}, or 0 to cancel.`);
+        await bot.sendMessage(from, { text: `Invalid number. Reply 1-${p.groups.length}, or 0 to cancel.` }, { quoted: mek });
+        return;
       }
 
       const target = p.groups[num - 1];
-      delete pending[sender];
+      delete pending[senderJid];
 
+      await bot.sendMessage(from, { text: "Sending..." }, { quoted: mek });
       await sendSongToGroup(bot, mek, target, p.video);
-      return reply("Sent successfully.");
+      await bot.sendMessage(from, { text: "Sent successfully." }, { quoted: mek });
     } catch (e) {
-      console.log(e);
-      return reply("Error while sending the song.");
+      console.log("csong number hook error:", e?.message || e);
     }
   },
 });
