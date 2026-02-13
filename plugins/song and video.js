@@ -41,6 +41,167 @@ function generateProgressBar(duration) {
 
 /* ================= SONG ================= */
 
+/* ================= YOUTUBE VIDEO (MP4) ================= */
+
+cmd(
+  {
+    pattern: "ytmp4",
+    alias: ["ytv", "video", "mp4"],
+    react: "🎬",
+    category: "download",
+    filename: __filename,
+  },
+  async (bot, mek, m, { from, q, reply }) => {
+    try {
+      if (!q) return reply("🎬 Please send a YouTube video name or link.");
+
+      reply("🔍 Searching YouTube video...");
+      const video = await getYoutube(q);
+      if (!video) return reply("❌ No results found.");
+
+      const duration = video.timestamp || "0:00";
+      const progressBar = generateProgressBar(duration);
+
+      // ===== Thumbnail + FULL original caption =====
+      await bot.sendMessage(
+        from,
+        {
+          image: { url: video.thumbnail },
+          caption: `
+🎬 *${video.title}*
+
+👤 *Channel:* ${video.author.name}
+⏱ *Duration:* ${duration}
+👀 *Views:* ${video.views.toLocaleString()}
+📅 *Uploaded:* ${video.ago || "N/A"}
+
+${progressBar}
+
+🍀 *DOWNLOADING VIDEO...* 🍀
+> PLEASE WAIT A MOMENT 🎬🎬🎬🎬🎬🎬🎬
+          `,
+        },
+        { quoted: mek }
+      );
+
+      // ===== Download video =====
+      reply("⬇️ Downloading video (360p)...");
+      
+      const data = await ytmp4(video.url, {
+        format: "mp4",
+        videoQuality: "360",
+      });
+
+      if (!data?.url) return reply("❌ Failed to download video.");
+
+      const filePath = path.join(__dirname, `${Date.now()}.mp4`);
+      await downloadFile(data.url, filePath);
+
+      await bot.sendMessage(
+        from,
+        {
+          video: fs.readFileSync(filePath),
+          mimetype: "video/mp4",
+          caption: `
+✅ *VIDEO DOWNLOADED SUCCESSFULLY!*
+
+🎬 *${video.title}*
+⏱ *Duration:* ${duration}
+🔗 *Link:* ${video.url}
+
+> MALIYA-MD ❤️
+          `,
+          gifPlayback: false,
+        },
+        { quoted: mek }
+      );
+
+      fs.unlinkSync(filePath);
+      
+    } catch (e) {
+      console.log("YTMP4 ERROR:", e);
+      reply("❌ Error while downloading video: " + e.message);
+    }
+  }
+);
+
+/* ================= YOUTUBE VIDEO HD ================= */
+
+cmd(
+  {
+    pattern: "ytmp4hd",
+    alias: ["ytvhd", "videohd", "hdvideo"],
+    react: "🎬",
+    category: "download",
+    filename: __filename,
+  },
+  async (bot, mek, m, { from, q, reply }) => {
+    try {
+      if (!q) return reply("🎬 Please send a YouTube video name or link for HD quality.");
+
+      reply("🔍 Searching YouTube video...");
+      const video = await getYoutube(q);
+      if (!video) return reply("❌ No results found.");
+
+      // ===== Thumbnail + caption =====
+      await bot.sendMessage(
+        from,
+        {
+          image: { url: video.thumbnail },
+          caption: `
+🎬 *${video.title}*
+
+👤 *Channel:* ${video.author.name}
+⏱ *Duration:* ${video.timestamp}
+🔗 *Link:* ${video.url}
+
+⬇️ *DOWNLOADING HD VIDEO (720p)...*
+          `,
+        },
+        { quoted: mek }
+      );
+
+      // ===== Download HD video =====
+      const data = await ytmp4(video.url, {
+        format: "mp4",
+        videoQuality: "720",
+      });
+
+      if (!data?.url) {
+        return reply("❌ Failed to download HD video. Try .ytmp4 instead.");
+      }
+
+      const filePath = path.join(__dirname, `${Date.now()}_HD.mp4`);
+      await downloadFile(data.url, filePath);
+
+      await bot.sendMessage(
+        from,
+        {
+          video: fs.readFileSync(filePath),
+          mimetype: "video/mp4",
+          caption: `
+✅ *HD VIDEO DOWNLOADED!*
+
+🎬 *${video.title}*
+⏱ *Duration:* ${video.timestamp}
+💎 *Quality:* 720p HD
+
+> MALIYA-MD ❤️
+          `,
+          gifPlayback: false,
+        },
+        { quoted: mek }
+      );
+
+      fs.unlinkSync(filePath);
+      
+    } catch (e) {
+      console.log("YTMP4 HD ERROR:", e);
+      reply("❌ Error while downloading HD video.");
+    }
+  }
+);
+
 cmd(
   {
     pattern: "song",
