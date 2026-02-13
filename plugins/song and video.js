@@ -1,5 +1,5 @@
 const { cmd } = require("../command");
-const { ytmp3, tiktok } = require("sadaslk-dlcore");
+const { ytmp3, tiktok, ytmp4 } = require("sadaslk-dlcore");
 const yts = require("yt-search");
 const fs = require("fs");
 const axios = require("axios");
