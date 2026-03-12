@@ -1,37 +1,56 @@
 const { cmd } = require("../command");
 
-cmd({
-    pattern: "testbtn",
-    desc: "බටන් වැඩද කියා බැලීමට",
-    category: "test",
-    react: "🔘",
-    filename: __filename
-},
-async (sock, mek, m, { from, reply }) => {
+cmd(
+  {
+    pattern: "poll",
+    desc: "Create a WhatsApp poll",
+    category: "group",
+    react: "📊",
+    filename: __filename,
+  },
+  async (conn, mek, m, { q, reply, from, isGroup }) => {
     try {
-        const sections = [
-            {
-                title: "MALIYA-MD TEST MENU",
-                rows: [
-                    { title: "Option 1", rowId: ".ping", description: "පළමු තේරීම" },
-                    { title: "Option 2", rowId: ".menu", description: "දෙවන තේරීම" }
-                ]
-            }
-        ];
+      if (!q) {
+        return reply(
+          "📌 Use:\n.poll Question | Option1, Option2\n\nExample:\n.poll Heta enawada | Ow, Na"
+        );
+      }
 
-        const listMessage = {
-            text: "මෙන්න ඔයා ඉල්ලපු බටන් එක! මේක වැඩ කරනවා නම් පහත බටන් එක පෙනෙයි.",
-            footer: "MALIYA-MD Testing System",
-            title: "🔘 BUTTON TEST SUCCESS",
-            buttonText: "CLICK HERE 🗂️",
-            sections
-        };
+      const parts = q.split("|");
+      if (parts.length < 2) {
+        return reply(
+          "❌ Format waradi.\n\nUse:\n.poll Question | Option1, Option2"
+        );
+      }
 
-        // බටන් එක සහිත මැසේජ් එක යැවීම
-        await sock.sendMessage(from, listMessage, { quoted: mek });
+      const question = parts[0].trim();
+      const options = parts[1]
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean);
 
+      if (!question) {
+        return reply("❌ Poll question ekak denna.");
+      }
+
+      if (options.length < 2) {
+        return reply("❌ Poll ekakata options 2k wath one.");
+      }
+
+      await conn.sendMessage(
+        from,
+        {
+          poll: {
+            name: question,
+            values: options,
+            selectableCount: 1,
+          },
+        },
+        { quoted: mek }
+      );
     } catch (e) {
-        console.log("Button Error: ", e.message);
-        reply("❌ බටන් එක යැවීමට නොහැකි වුණා. හේතුව: " + e.message);
+      console.log("POLL PLUGIN ERROR:", e);
+      return reply("❌ Poll send karanna bari una.");
     }
-});
+  }
+);
