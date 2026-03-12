@@ -1,498 +1,159 @@
-// index.js (FULL CODE) ✅ Status Auto Seen + React FIXED (Baileys latest) + Cmd Auto-Fix (CONFIRM PLUGIN)
-// ------------------------------------------------------------
+const { cmd, replyHandlers } = require("../command");
+const puppeteer = require("puppeteer");
 
-const {
-  default: makeWASocket,
-  useMultiFileAuthState,
-  DisconnectReason,
-  jidNormalizedUser,
-  getContentType,
-  downloadContentFromMessage,
-  fetchLatestBaileysVersion,
-  Browsers,
-} = require("@whiskeysockets/baileys");
+// දත්ත තාවකාලිකව ගබඩා කිරීමට
+const pendingSearch = {};
+const pendingQuality = {};
 
-const fs = require("fs");
-const P = require("pino");
-const express = require("express");
-const path = require("path");
-
-const config = require("./config");
-const { sms } = require("./lib/msg");
-const { File } = require("megajs");
-const { commands, replyHandlers } = require("./command");
-
-// ✅ auto msg plugin (GEMINI_API_KEY2 uses in plugin)
-const autoMsgPlugin = require("./plugins/auto_msg.js");
-
-// ✅ Cmd AutoFix Confirm plugin (1=run / 2=cancel)
-let cmdFixPlugin = null;
-try {
-  cmdFixPlugin = require("./plugins/cmd_autofix_confirm.js");
-} catch (e) {
-  console.log("⚠️ cmd_autofix_confirm.js not found or failed to load:", e?.message || e);
+// -----------------------------
+// Helper Functions
+// -----------------------------
+function normalizeQuality(text) {
+  if (!text) return "Unknown";
+  text = text.toUpperCase();
+  if (/1080|FHD/.test(text)) return "1080p";
+  if (/720|HD/.test(text)) return "720p";
+  if (/480|SD/.test(text)) return "480p";
+  return text;
 }
 
-const app = express();
-const port = process.env.PORT || 8000;
-
-const prefix = ".";
-const ownerNumber = ["94701369636"];
-const authDir = path.join(__dirname, "/auth_info_baileys/");
-const credsPath = path.join(authDir, "creds.json");
-
-/* ================= SESSION CHECK ================= */
-async function ensureSessionFile() {
+async function searchMovies(query) {
+  const browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox"] });
   try {
-    if (!fs.existsSync(credsPath)) {
-      if (!config.SESSION_ID) {
-        console.error("❌ SESSION_ID missing");
-        process.exit(1);
-      }
-
-      console.log("🔄 Downloading session from MEGA...");
-      const filer = File.fromURL(`https://mega.nz/file/${config.SESSION_ID}`);
-
-      filer.download((err, data) => {
-        if (err) {
-          console.error("❌ Session download failed:", err);
-          process.exit(1);
-        }
-        fs.mkdirSync(authDir, { recursive: true });
-        fs.writeFileSync(credsPath, data);
-        console.log("✅ Session restored. Restarting...");
-        setTimeout(connectToWA, 2000);
-      });
-    } else {
-      setTimeout(connectToWA, 1000);
-    }
-  } catch (e) {
-    console.error("❌ ensureSessionFile error:", e);
-    process.exit(1);
+    const page = await browser.newPage();
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+    await page.goto(`https://cinesubz.lk/?s=${encodeURIComponent(query)}`, { waitUntil: "networkidle2", timeout: 60000 });
+    
+    return await page.$$eval(".display-item .item-box", boxes =>
+      boxes.slice(0, 10).map((box, index) => ({
+        id: index + 1,
+        title: box.querySelector("a")?.title?.trim() || "No Title",
+        movieUrl: box.querySelector("a")?.href || "",
+        thumb: box.querySelector("img")?.src || "",
+      })).filter(m => m.movieUrl)
+    );
+  } finally {
+    await browser.close();
   }
 }
 
-/* ================= PLUGINS ================= */
-const antiDeletePlugin = require("./plugins/antidelete.js");
-global.pluginHooks = global.pluginHooks || [];
-global.pluginHooks.push(antiDeletePlugin); // ✅ keep as-is
+async function getDirectDownloadLinks(movieUrl) {
+  const browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox", "--disable-setuid-sandbox"] });
+  try {
+    const page = await browser.newPage();
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+    await page.goto(movieUrl, { waitUntil: "networkidle2" });
 
-/* ================= CONNECT ================= */
-async function connectToWA() {
-  console.log("Connecting MALIYA-MD 🧬...");
-
-  const { state, saveCreds } = await useMultiFileAuthState(authDir);
-  const { version } = await fetchLatestBaileysVersion();
-
-  const sock = makeWASocket({
-    logger: P({ level: "silent" }),
-    printQRInTerminal: false,
-    browser: Browsers.macOS("Firefox"),
-    auth: state,
-    version,
-    syncFullHistory: true,
-    markOnlineOnConnect: true,
-    generateHighQualityLinkPreview: true,
-  });
-
-  /* ========== CONNECTION UPDATE ========== */
-  sock.ev.on("connection.update", async (update) => {
-    const { connection, lastDisconnect } = update;
-
-    if (connection === "close") {
-      const code = lastDisconnect?.error?.output?.statusCode;
-      if (code !== DisconnectReason.loggedOut) {
-        console.log("🔁 Reconnecting...");
-        connectToWA();
-      } else {
-        console.log("❌ Logged out. Delete auth_info_baileys and re-pair.");
-      }
-    }
-
-    if (connection === "open") {
-      console.log("✅ MALIYA-MD connected");
-
-      /* ===== PREMIUM CONNECT MESSAGE ===== */
-      const OWNER_NAME = "Malindu Nadith";
-      const BOT_VERSION = "v4.0.0";
-
-      const now = new Date();
-      const time = new Intl.DateTimeFormat("en-GB", {
-        timeZone: "Asia/Colombo",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: true,
-      }).format(now);
-
-      const date = new Intl.DateTimeFormat("en-GB", {
-        timeZone: "Asia/Colombo",
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-      }).format(now);
-
-      const up = `
- 🌈━━━━━━━━━━━━━🌈
-🔥🤖 *MALIYA-MD* 🤖🔥
- 🌈━━━━━━━━━━━━━🌈
-
-✅✨ Connection : CONNECTED & ONLINE
-⚡🧬 System     : STABLE | FAST | SECURE
-🛡️🔐 Mode       : PUBLIC
-🎯🧩 Prefix     : ${prefix}
-
-🧑‍💻👑 Owner      : ${OWNER_NAME}
-🚀📦 Version    : ${BOT_VERSION}
-
-🕒⏳ Time       : ${time}
-📅🗓️ Date       : ${date}
-
-💬📖 Type  .menu  to start
-🔥🚀 Powered by MALIYA-MD Engine
-🌈━━━━━━━━━━━🌈
-`.trim();
-
-      try {
-        await sock.sendMessage(ownerNumber[0] + "@s.whatsapp.net", {
-          image: {
-            url: "https://github.com/Maliya-bro/MALIYA-MD/blob/main/images/Screenshot%202026-01-18%20122855.png?raw=true",
-          },
-          caption: up,
-        });
-      } catch (e) {
-        console.log("⚠️ Connect msg send failed:", e?.message || e);
-      }
-
-      // load plugins
-      try {
-        fs.readdirSync("./plugins/").forEach((plugin) => {
-          if (plugin.endsWith(".js")) require(`./plugins/${plugin}`);
-        });
-      } catch (e) {
-        console.log("⚠️ Plugin load error:", e?.message || e);
-      }
-    }
-  });
-
-  sock.ev.on("creds.update", saveCreds);
-
-  /* ================= MESSAGE HANDLER ================= */
-  sock.ev.on("messages.upsert", async ({ messages }) => {
-    if (!messages || !messages.length) return;
-
-    for (const mek0 of messages) {
-      const mek = mek0;
-      if (!mek?.message) continue;
-
-      // unwrap ephemeral
-      mek.message =
-        getContentType(mek.message) === "ephemeralMessage"
-          ? mek.message.ephemeralMessage.message
-          : mek.message;
-
-      // ✅ plugins onMessage (keep as-is) [antidelete etc.]
-      if (global.pluginHooks) {
-        for (const plugin of global.pluginHooks) {
-          if (plugin.onMessage) {
-            try {
-              await plugin.onMessage(sock, mek);
-            } catch {}
-          }
-        }
-      }
-
-      /* ============================================================
-         ✅✅✅ STATUS AUTO SEEN + REACT + FORWARD (FIXED)
-         ============================================================ */
-      if (mek.key?.remoteJid === "status@broadcast") {
-        const participantRaw = mek.key.participant; // status owner
-        const id = mek.key.id;
-
-        if (!participantRaw || !id) continue;
-
-        // normalize jids
-        const participant = jidNormalizedUser(participantRaw);
-        const myJid = jidNormalizedUser(sock.user?.id || "");
-
-        const mentionJid = participant.includes("@s.whatsapp.net")
-          ? participant
-          : participant + "@s.whatsapp.net";
-
-        // ✅ Proper status key
-        const statusKey = {
-          remoteJid: "status@broadcast",
-          id,
-          participant,
-          fromMe: false,
+    const linkItems = await page.$$eval('a[href*="/zt-links/"]', links => 
+      links.map(link => {
+        const text = link.closest('div')?.innerText || "";
+        return {
+          url: link.href,
+          quality: text.includes('1080p') ? '1080p' : text.includes('720p') ? '720p' : '480p',
+          size: text.match(/\d+(\.\d+)?\s*(GB|MB)/i)?.[0] || 'Unknown'
         };
+      })
+    );
 
-        // ✅ Seen
-        if (String(config.AUTO_STATUS_SEEN).toLowerCase() === "true") {
-          try {
-            await sock.readMessages([statusKey]);
-
-            // fallback
-            try {
-              await sock.sendReadReceipt("status@broadcast", participant, [id]);
-            } catch {}
-
-            console.log(`[✓] Status seen: ${id} (${participant})`);
-          } catch (e) {
-            console.error("❌ Failed to mark status as seen:", e?.message || e);
-          }
-        }
-
-        // ✅ React
-        if (String(config.AUTO_STATUS_REACT).toLowerCase() === "true") {
-          try {
-            const emojis = [
-              "❤️","💸","😇","🍂","💥","💯","🔥","💫","💎","💗","🤍","🖤","👀","🙌","🙆","🚩",
-              "🥰","💐","😎","✅","🫀","😁","😄","🌸","🕊️","🌷","⛅","🌟","🗿","💜","🌝"
-            ];
-            const randomEmoji = emojis[Math.floor(Math.random() * emojis.length)];
-
-            await sock.sendMessage(
-              "status@broadcast",
-              { react: { text: randomEmoji, key: statusKey } },
-              { statusJidList: [participant, myJid].filter(Boolean) }
-            );
-
-            console.log(`[✓] Reacted to status of ${participant} with ${randomEmoji}`);
-          } catch (e) {
-            console.error("❌ Failed to react to status:", e?.message || e);
-          }
-        }
-
-        // ✅ Forward text-only status to owner
-        if (
-          mek.message?.extendedTextMessage &&
-          !mek.message.imageMessage &&
-          !mek.message.videoMessage
-        ) {
-          const text = mek.message.extendedTextMessage.text || "";
-          if (text.trim().length > 0) {
-            try {
-              await sock.sendMessage(ownerNumber[0] + "@s.whatsapp.net", {
-                text: `📝 *Text Status*\n👤 From: @${mentionJid.split("@")[0]}\n\n${text}`,
-                mentions: [mentionJid],
-              });
-              console.log(`✅ Text-only status from ${mentionJid} forwarded.`);
-            } catch (e) {
-              console.error("❌ Failed to forward text status:", e?.message || e);
-            }
-          }
-        }
-
-        // ✅ Forward image/video status to owner
-        if (mek.message?.imageMessage || mek.message?.videoMessage) {
-          try {
-            const msgType = mek.message.imageMessage ? "imageMessage" : "videoMessage";
-            const mediaMsg = mek.message[msgType];
-
-            const stream = await downloadContentFromMessage(
-              mediaMsg,
-              msgType === "imageMessage" ? "image" : "video"
-            );
-
-            let buffer = Buffer.from([]);
-            for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-
-            const mimetype =
-              mediaMsg.mimetype || (msgType === "imageMessage" ? "image/jpeg" : "video/mp4");
-            const captionText = mediaMsg.caption || "";
-
-            await sock.sendMessage(ownerNumber[0] + "@s.whatsapp.net", {
-              [msgType === "imageMessage" ? "image" : "video"]: buffer,
-              mimetype,
-              caption: `📥 *Forwarded Status*\n👤 From: @${mentionJid.split("@")[0]}\n\n${captionText}`,
-              mentions: [mentionJid],
-            });
-
-            console.log(`✅ Media status from ${mentionJid} forwarded.`);
-          } catch (err) {
-            console.error("❌ Failed to download or forward media status:", err?.message || err);
-          }
-        }
-
-        // ✅ status වලට normal handler run නොවෙන්න
-        continue;
-      }
-      /* ===================== END STATUS BLOCK ===================== */
-
-      const m = sms(sock, mek);
-      const type = getContentType(mek.message);
-
-      let body =
-        type === "conversation"
-          ? mek.message.conversation
-          : mek.message[type]?.text || mek.message[type]?.caption || "";
-
-      body = String(body || "");
-
-      let isCmd = body.startsWith(prefix);
-      let commandName = isCmd
-        ? body.slice(prefix.length).trim().split(" ")[0].toLowerCase()
-        : "";
-
-      let args = body.trim().split(/ +/).slice(1);
-      let q = args.join(" ");
-
-      const from = mek.key.remoteJid;
-      const sender = mek.key.fromMe ? sock.user.id : mek.key.participant || mek.key.remoteJid;
-      const senderNumber = (sender || "").split("@")[0];
-
-      const isGroup = (from || "").endsWith("@g.us");
-      const isOwner = ownerNumber.includes(senderNumber);
-
-      const reply = (text) => sock.sendMessage(from, { text }, { quoted: mek });
-
-      // ✅ auto-msg plugin ONLY here (so status won't trigger)
+    let finalLinks = [];
+    for (const item of linkItems.slice(0, 3)) {
       try {
-        if (autoMsgPlugin && typeof autoMsgPlugin.onMessage === "function") {
-          await autoMsgPlugin.onMessage(sock, mek, m, {
-            from,
-            body,
-            args,
-            q,
-            sender,
-            senderNumber,
-            isGroup,
-            isOwner,
-            reply,
-            isCmd,
-            commandName,
-            prefix,
-          });
-        }
-      } catch (e) {
-        console.log("AutoMsg hook error:", e?.message || e);
-      }
-
-      // ✅ Cmd Auto-Fix Confirm plugin (friendly ask 1/2)
-      // NOTE: We pass "commands" so plugin uses the correct command list
-      try {
-        if (cmdFixPlugin && typeof cmdFixPlugin.onMessage === "function") {
-          const res = await cmdFixPlugin.onMessage(sock, mek, m, {
-            from,
-            body,
-            args,
-            q,
-            sender,
-            senderNumber,
-            isGroup,
-            isOwner,
-            reply,
-            prefix,
-            isCmd,
-            commandName,
-            commands, // ✅ IMPORTANT FIX
-          });
-
-          // handled and nothing to run
-          if (res?.handled && !res?.newBody) continue;
-
-          // confirmed -> replace body with corrected cmd and re-parse
-          if (res?.handled && res?.newBody) {
-            body = String(res.newBody || "");
-
-            isCmd = body.startsWith(prefix);
-            commandName = isCmd
-              ? body.slice(prefix.length).trim().split(" ")[0].toLowerCase()
-              : "";
-
-            args = body.trim().split(/ +/).slice(1);
-            q = args.join(" ");
+        await page.goto(item.url, { waitUntil: "networkidle2" });
+        const finalPageUrl = await page.$eval('a.btn-danger, .download-btn', el => el.href).catch(() => null);
+        if (finalPageUrl) {
+          await page.goto(finalPageUrl, { waitUntil: "networkidle2" });
+          const directFileLink = await page.$eval('a[href*="sonic-cloud.online"]', el => el.href).catch(() => null);
+          if (directFileLink) {
+            finalLinks.push({ link: directFileLink, quality: item.quality, size: item.size });
           }
         }
-      } catch (e) {
-        console.log("cmdFixPlugin error:", e?.message || e);
-      }
-
-      // ===================== REPLY HANDLERS (NO PREFIX) =====================
-      if (!isCmd && replyHandlers && replyHandlers.length) {
-        for (const h of replyHandlers) {
-          if (typeof h.filter !== "function") continue;
-
-          let ok = false;
-          try {
-            ok = h.filter(body, { sender, from, isGroup, senderNumber });
-          } catch {
-            ok = false;
-          }
-
-          if (ok) {
-            if (h.react) {
-              sock.sendMessage(from, { react: { text: h.react, key: mek.key } });
-            }
-
-            await h.function(sock, mek, m, {
-              from,
-              body,
-              args,
-              q,
-              sender,
-              senderNumber,
-              isGroup,
-              isOwner,
-              reply,
-            });
-            break;
-          }
-        }
-      }
-
-      // ===================== COMMAND HANDLER =====================
-      if (isCmd) {
-        const cmd = (commands || []).find(
-          (c) => c.pattern === commandName || c.alias?.includes(commandName)
-        );
-
-        if (cmd) {
-          if (cmd.react) {
-            sock.sendMessage(from, { react: { text: cmd.react, key: mek.key } });
-          }
-
-          await cmd.function(sock, mek, m, {
-            from,
-            body,
-            args,
-            q,
-            sender,
-            senderNumber,
-            isGroup,
-            isOwner,
-            reply,
-          });
-        }
-        // unknown commands are handled by cmd_autofix_confirm.js
-      }
+      } catch (e) {}
     }
-  });
-
-  /* ================= DELETE HANDLER (FIXED) ================= */
-  sock.ev.on("messages.update", async (updates) => {
-    if (!global.pluginHooks) return;
-
-    for (const plugin of global.pluginHooks) {
-      if (typeof plugin.onDelete === "function") {
-        try {
-          await plugin.onDelete(sock, updates);
-        } catch (e) {
-          console.log("AntiDelete onDelete error:", e?.message);
-        }
-      }
-    }
-  });
+    return finalLinks;
+  } finally {
+    await browser.close();
+  }
 }
 
-/* ================= SERVER ================= */
-ensureSessionFile();
+// -----------------------------
+// Main Command
+// -----------------------------
+cmd({
+  pattern: "film",
+  alias: ["movie", "cinesubz"],
+  category: "download",
+  react: "🎬",
+  desc: "Cinesubz movie downloader",
+  filename: __filename
+}, async (sock, mek, m, { from, q, sender, reply }) => {
+  if (!q) return reply("අවශ්‍ය චිත්‍රපටයේ නම ඇතුළත් කරන්න. (උදා: .film Leo)");
+  
+  reply("🔎 සොයමින් පවතී, කරුණාකර රැඳී සිටින්න...");
+  const results = await searchMovies(q);
+  if (results.length === 0) return reply("❌ කිසිවක් හමු වූයේ නැත.");
 
-app.get("/", (req, res) => {
-  res.send("Hey There, MALIYA-MD started ✅");
+  pendingSearch[sender] = { results, timestamp: Date.now() };
+
+  let msg = `🎬 *CINESUBZ MOVIE SEARCH*\n\n`;
+  results.forEach((res, i) => msg += `*${i + 1}.* ${res.title}\n`);
+  msg += `\n📥 *ලින්ක් ලබාගැනීමට අංකය Reply කරන්න.*`;
+
+  await sock.sendMessage(from, { image: { url: results[0].thumb }, caption: msg }, { quoted: mek });
 });
 
-app.listen(port, () => {
-  console.log(`Server listening on http://localhost:${port}`);
+// -----------------------------
+// Reply Handlers (Number Listeners)
+// -----------------------------
+
+// 1. චිත්‍රපටය තේරීම සඳහා
+replyHandlers.push({
+  filter: (body, { sender }) => {
+    return pendingSearch[sender] && !isNaN(body) && parseInt(body) <= pendingSearch[sender].results.length;
+  },
+  react: "⏳",
+  function: async (sock, mek, m, { from, body, sender, reply }) => {
+    const index = parseInt(body) - 1;
+    const selected = pendingSearch[sender].results[index];
+    delete pendingSearch[sender];
+
+    reply(`⏳ *${selected.title}* සඳහා Direct Links ලබාගනිමින් පවතී...`);
+    const links = await getDirectDownloadLinks(selected.movieUrl);
+    
+    if (links.length === 0) return reply("❌ Direct links සොයාගත නොහැකි විය.");
+
+    pendingQuality[sender] = { title: selected.title, links, timestamp: Date.now() };
+
+    let qMsg = `🎬 *${selected.title}*\n\n`;
+    links.forEach((l, i) => qMsg += `*${i + 1}.* ${l.quality} (${l.size})\n`);
+    qMsg += `\n📥 *ඩවුන්ලෝඩ් කිරීමට අංකය Reply කරන්න.*`;
+    
+    reply(qMsg);
+  }
 });
+
+// 2. Quality එක තේරීම සහ File එක යැවීම සඳහා
+replyHandlers.push({
+  filter: (body, { sender }) => {
+    return pendingQuality[sender] && !isNaN(body) && parseInt(body) <= pendingQuality[sender].links.length;
+  },
+  react: "📤",
+  function: async (sock, mek, m, { from, body, sender, reply }) => {
+    const index = parseInt(body) - 1;
+    const data = pendingQuality[sender];
+    const selected = data.links[index];
+    delete pendingQuality[sender];
+
+    try {
+      await sock.sendMessage(from, {
+        document: { url: selected.link },
+        mimetype: "video/mp4",
+        fileName: `${data.title} (${selected.quality}).mp4`,
+        caption: `🎬 *${data.title}*\n⭐ Quality: ${selected.quality}\n\n*Powered by MALIYA-MD*`
+      }, { quoted: mek });
+    } catch (e) {
+      reply("❌ දෝෂයක් ඇතිවිය. Direct Link:\n" + selected.link);
+    }
+  }
+});
+
+module.exports = { searchMovies, getDirectDownloadLinks };
