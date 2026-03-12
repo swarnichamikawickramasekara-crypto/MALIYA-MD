@@ -1,18 +1,18 @@
 const { cmd, replyHandlers } = require("../command");
-const puppeteer = require("puppeteer");
+const puppeteer = require("puppeteer-extra");
+const StealthPlugin = require("puppeteer-extra-plugin-stealth");
+puppeteer.use(StealthPlugin());
 
 const pendingSearch = {};
 const pendingQuality = {};
 
-// GitHub Actions වලට ගැලපෙන settings
 const puppeteerOptions = {
   headless: "new",
   args: [
     "--no-sandbox",
     "--disable-setuid-sandbox",
     "--disable-dev-shm-usage",
-    "--disable-gpu",
-    "--no-zygote"
+    "--disable-blink-features=AutomationControlled"
   ],
   executablePath: '/usr/bin/google-chrome'
 };
@@ -21,9 +21,10 @@ async function getDirectDownloadLinks(movieUrl) {
   const browser = await puppeteer.launch(puppeteerOptions);
   try {
     const page = await browser.newPage();
+    // නියම පරිශීලකයෙක් ලෙස පෙනී සිටීමට තවත් සැකසුම්
+    await page.setViewport({ width: 1280, height: 800 });
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
 
-    // Step 1: Movie Page
     await page.goto(movieUrl, { waitUntil: "networkidle2", timeout: 60000 });
 
     const linkItems = await page.$$eval('a[href*="/zt-links/"]', links => 
@@ -35,27 +36,36 @@ async function getDirectDownloadLinks(movieUrl) {
     );
 
     let finalLinks = [];
-    for (const item of linkItems.slice(0, 1)) { // එක ලින්ක් එකක් පමණක් මුලින් පරීක්ෂා කරමු
+    for (const item of linkItems.slice(0, 1)) {
       try {
-        await page.goto(item.url, { waitUntil: "domcontentloaded", timeout: 60000 });
+        // Redirection Page (ZT-Links)
+        await page.goto(item.url, { waitUntil: "networkidle0", timeout: 60000 });
         
-        // Screenshot 3 අනුව Timer එකට තත්පර 12ක් රැඳී සිටීම
-        await new Promise(r => setTimeout(r, 12000)); 
+        // Screenshot 3 අනුව තත්පර 15ක් අනිවාර්යයෙන් රැඳී සිටීම
+        await new Promise(r => setTimeout(r, 15000)); 
 
-        const directLink = await page.evaluate(() => {
+        // පේජ් එකේ තියෙන බටන් එක සොයාගෙන එය Click කිරීම (Automation වලට වඩා හොඳයි)
+        const directLink = await page.evaluate(async () => {
+          const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+          
+          // බටන් එක එනකම් පොඩ්ඩක් scroll කරලා බලමු
+          window.scrollBy(0, 500);
+          await sleep(1000);
+
           const anchors = Array.from(document.querySelectorAll('a'));
           const target = anchors.find(a => 
             a.href.includes('sonic-cloud.online') || 
-            a.className.includes('btn-danger') ||
-            a.innerText.toLowerCase().includes('download')
+            a.innerText.toLowerCase().includes('download') ||
+            a.classList.contains('btn-danger')
           );
+          
           return target ? target.href : null;
         });
 
         if (directLink) {
           finalLinks.push({ link: directLink, quality: item.quality, size: item.size });
         }
-      } catch (e) { console.log("Link Error:", e.message); }
+      } catch (e) { console.log("Scrape error:", e.message); }
     }
     return finalLinks;
   } finally {
@@ -63,16 +73,15 @@ async function getDirectDownloadLinks(movieUrl) {
   }
 }
 
-// --- Commands ---
-
+// --- Commands (Film Search) ---
 cmd({
   pattern: "film",
   alias: ["movie", "cinesubz"],
-  category: "download",
   react: "🎬",
+  category: "download",
   filename: __filename
 }, async (sock, mek, m, { from, q, sender, reply }) => {
-  if (!q) return reply("චිත්‍රපටයේ නම ලබා දෙන්න.");
+  if (!q) return reply("චිත්‍රපටයක නමක් ලබා දෙන්න.");
   reply("🔎 සෙවුම් කරමින් පවතී...");
 
   try {
@@ -101,6 +110,7 @@ cmd({
   } catch (e) { reply("Error: " + e.message); }
 });
 
+// Reply Selection
 replyHandlers.push({
   filter: (body, { sender }) => pendingSearch[sender] && !isNaN(body),
   function: async (sock, mek, m, { from, body, sender, reply }) => {
@@ -108,10 +118,13 @@ replyHandlers.push({
     if (!selected) return;
     delete pendingSearch[sender];
 
-    reply(`⏳ *${selected.title}* ලින්ක් ලබාගනිමින් පවතී...`);
+    reply(`⏳ *${selected.title}* ලින්ක් ලබාගනිමින් පවතී...\nCloudflare bypass කරමින් පවතින නිසා මඳක් රැඳී සිටින්න.`);
+    
     const links = await getDirectDownloadLinks(selected.movieUrl);
     
-    if (links.length === 0) return reply("❌ ලින්ක් සොයාගත නොහැකි විය. පසුව උත්සාහ කරන්න.");
+    if (links.length === 0) {
+      return reply("❌ ලින්ක් ලබාගැනීමට නොහැකි විය. වෙබ් අඩවියේ Bot Detection එක මගින් GitHub සර්වර් එක අවහිර කර ඇත.");
+    }
 
     pendingQuality[sender] = { title: selected.title, links };
     let qMsg = `🎬 *${selected.title}*\n\n`;
@@ -134,7 +147,7 @@ replyHandlers.push({
         document: { url: selected.link },
         mimetype: "video/mp4",
         fileName: `${data.title}.mp4`,
-        caption: `🎬 *${data.title}*\n\n*Powered by MALIYA-MD*`
+        caption: `🎬 *${data.title}*\n\n*Enjoy!*`
       }, { quoted: mek });
     } catch (e) { reply("❌ දෝෂයකි: " + selected.link); }
   }
