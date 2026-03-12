@@ -4,17 +4,15 @@ const puppeteer = require("puppeteer");
 const pendingSearch = {};
 const pendingQuality = {};
 
-// GitHub Actions වලට ගැලපෙන Puppeteer Launch Options
+// GitHub Actions වලට ගැලපෙන settings
 const puppeteerOptions = {
   headless: "new",
   args: [
     "--no-sandbox",
     "--disable-setuid-sandbox",
     "--disable-dev-shm-usage",
-    "--no-first-run",
-    "--no-zygote",
-    "--single-process",
-    "--disable-gpu"
+    "--disable-gpu",
+    "--no-zygote"
   ],
   executablePath: '/usr/bin/google-chrome'
 };
@@ -37,20 +35,19 @@ async function getDirectDownloadLinks(movieUrl) {
     );
 
     let finalLinks = [];
-    for (const item of linkItems.slice(0, 2)) {
+    for (const item of linkItems.slice(0, 1)) { // එක ලින්ක් එකක් පමණක් මුලින් පරීක්ෂා කරමු
       try {
-        // Step 2: ZT-Links Page (Screenshot 3)
         await page.goto(item.url, { waitUntil: "domcontentloaded", timeout: 60000 });
         
-        // Timer එක ඉවර වන තෙක් තත්පර 12ක් රැඳී සිටීම
+        // Screenshot 3 අනුව Timer එකට තත්පර 12ක් රැඳී සිටීම
         await new Promise(r => setTimeout(r, 12000)); 
 
         const directLink = await page.evaluate(() => {
           const anchors = Array.from(document.querySelectorAll('a'));
           const target = anchors.find(a => 
             a.href.includes('sonic-cloud.online') || 
-            a.innerText.toLowerCase().includes('download') ||
-            a.className.includes('btn-danger')
+            a.className.includes('btn-danger') ||
+            a.innerText.toLowerCase().includes('download')
           );
           return target ? target.href : null;
         });
@@ -58,7 +55,7 @@ async function getDirectDownloadLinks(movieUrl) {
         if (directLink) {
           finalLinks.push({ link: directLink, quality: item.quality, size: item.size });
         }
-      } catch (e) { console.log("Inner Link Error:", e.message); }
+      } catch (e) { console.log("Link Error:", e.message); }
     }
     return finalLinks;
   } finally {
@@ -75,8 +72,8 @@ cmd({
   react: "🎬",
   filename: __filename
 }, async (sock, mek, m, { from, q, sender, reply }) => {
-  if (!q) return reply("චිත්‍රපටයේ නම ලබා දෙන්න. (උදා: .film Leo)");
-  reply("🔎 සෙවුම් කරමින් පවතී, කරුණාකර රැඳී සිටින්න...");
+  if (!q) return reply("චිත්‍රපටයේ නම ලබා දෙන්න.");
+  reply("🔎 සෙවුම් කරමින් පවතී...");
 
   try {
     const browser = await puppeteer.launch(puppeteerOptions);
@@ -93,7 +90,7 @@ cmd({
     );
     await browser.close();
 
-    if (results.length === 0) return reply("❌ කිසිවක් හමු වූයේ නැත.");
+    if (results.length === 0) return reply("❌ හමු වූයේ නැත.");
 
     pendingSearch[sender] = { results };
     let msg = `🎬 *MALIYA-MD MOVIE SEARCH*\n\n`;
@@ -104,7 +101,6 @@ cmd({
   } catch (e) { reply("Error: " + e.message); }
 });
 
-// Selection Handler
 replyHandlers.push({
   filter: (body, { sender }) => pendingSearch[sender] && !isNaN(body),
   function: async (sock, mek, m, { from, body, sender, reply }) => {
@@ -112,10 +108,10 @@ replyHandlers.push({
     if (!selected) return;
     delete pendingSearch[sender];
 
-    reply(`⏳ *${selected.title}* ලින්ක් ලබාගනිමින් පවතී... (තත්පර 30ක් පමණ ගතවේ)`);
+    reply(`⏳ *${selected.title}* ලින්ක් ලබාගනිමින් පවතී...`);
     const links = await getDirectDownloadLinks(selected.movieUrl);
     
-    if (links.length === 0) return reply("❌ ලින්ක් ලබාගැනීමට අපහසුයි. කරුණාකර නැවත උත්සාහ කරන්න.");
+    if (links.length === 0) return reply("❌ ලින්ක් සොයාගත නොහැකි විය. පසුව උත්සාහ කරන්න.");
 
     pendingQuality[sender] = { title: selected.title, links };
     let qMsg = `🎬 *${selected.title}*\n\n`;
@@ -138,10 +134,8 @@ replyHandlers.push({
         document: { url: selected.link },
         mimetype: "video/mp4",
         fileName: `${data.title}.mp4`,
-        caption: `🎬 *${data.title}*\n\n*Enjoy! - Powered by MALIYA-MD*`
+        caption: `🎬 *${data.title}*\n\n*Powered by MALIYA-MD*`
       }, { quoted: mek });
-    } catch (e) {
-      reply("❌ ගොනුව එවීමේදී දෝෂයක් ඇතිවිය. ඩිරෙක්ට් ලින්ක් එක: " + selected.link);
-    }
+    } catch (e) { reply("❌ දෝෂයකි: " + selected.link); }
   }
 });
