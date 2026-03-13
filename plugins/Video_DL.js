@@ -1,102 +1,151 @@
 const { cmd } = require("../command");
+const { ytmp3, ytmp4, tiktok } = require("sadaslk-dlcore");
 const yts = require("yt-search");
 const axios = require("axios");
+const fs = require("fs");
+const path = require("path");
+const ffmpeg = require("fluent-ffmpeg");
+const ffmpegPath = require("@ffmpeg-installer/ffmpeg").path;
+const ffprobePath = require("@ffprobe-installer/ffprobe").path;
 
-function generateProgressBar(duration = "0:00") {
-    const totalBars = 10;
-    const bar = "─".repeat(totalBars);
-    return `*00:00* ${bar}○ *${duration}*`;
+ffmpeg.setFfmpegPath(ffmpegPath);
+ffmpeg.setFfprobePath(ffprobePath);
+
+const TEMP_DIR = path.join(__dirname, "../temp");
+if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
+
+async function getYoutube(query) {
+  const isUrl = /(youtube\.com|youtu\.be)/i.test(query);
+  if (isUrl) {
+    const id = query.includes("v=")
+      ? query.split("v=")[1].split("&")[0]
+      : query.split("/").pop().split("?")[0];
+    const info = await yts({ videoId: id });
+    return info;
+  }
+
+  const search = await yts(query);
+  if (!search.videos.length) return null;
+  return search.videos[0];
 }
 
-function isYouTubeUrl(text = "") {
-    return /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(text.trim());
+async function downloadFile(url, outPath) {
+  const res = await axios({
+    url,
+    method: "GET",
+    responseType: "stream",
+    timeout: 120000,
+  });
+
+  return new Promise((resolve, reject) => {
+    const writer = fs.createWriteStream(outPath);
+    res.data.pipe(writer);
+    writer.on("finish", () => resolve(outPath));
+    writer.on("error", reject);
+  });
 }
 
-async function getDownload(url) {
-    const res = await axios.get(`https://api.vevioz.com/api/button/mp4/${encodeURIComponent(url)}`);
-    const match = res.data.match(/href="([^"]+)"[^>]*>Download MP4/);
-    if (!match) return null;
-    return match[1];
+async function reencodeForWhatsApp(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .videoCodec("libx264")
+      .audioCodec("aac")
+      .outputOptions([
+        "-movflags +faststart",
+        "-pix_fmt yuv420p",
+        "-profile:v main",
+        "-level 3.1",
+        "-preset veryfast",
+        "-crf 28",
+        "-maxrate 1200k",
+        "-bufsize 2400k",
+        "-vf scale='min(854,iw)':-2"
+      ])
+      .format("mp4")
+      .on("end", () => resolve(outputPath))
+      .on("error", reject)
+      .save(outputPath);
+  });
+}
+
+function safeUnlink(file) {
+  try {
+    if (file && fs.existsSync(file)) fs.unlinkSync(file);
+  } catch {}
 }
 
 cmd(
-{
-pattern: "video",
-alias: ["ytmp4","vdl"],
-react: "🎥",
-category: "download",
-filename: __filename
-},
-async (bot, mek, m, { from, q, reply }) => {
+  {
+    pattern: "ytmp4",
+    alias: ["ytv", "video"],
+    react: "🎥",
+    desc: "Download YouTube MP4 by name or link",
+    category: "download",
+    filename: __filename,
+  },
+  async (bot, mek, m, { from, q, reply }) => {
+    let rawFile = null;
+    let fixedFile = null;
 
-try {
+    try {
+      if (!q) return reply("🎬 Send video name or YouTube link");
 
-if (!q) return reply("🎥 Please provide a YouTube link or video name.");
+      await reply("🔎 Searching YouTube...");
+      const video = await getYoutube(q);
+      if (!video) return reply("❌ No results found");
 
-await reply("🔍 Searching Video...");
+      const caption =
+        `🎬 *${video.title}*\n\n` +
+        `👤 Channel: ${video.author?.name || "Unknown"}\n` +
+        `⏱ Duration: ${video.timestamp || "Unknown"}\n` +
+        `👀 Views: ${video.views ? video.views.toLocaleString() : "Unknown"}\n` +
+        `📅 Uploaded: ${video.ago || "Unknown"}\n` +
+        `🔗 ${video.url}`;
 
-let video;
-let videoUrl;
+      await bot.sendMessage(
+        from,
+        {
+          image: { url: video.thumbnail },
+          caption,
+        },
+        { quoted: mek }
+      );
 
-if (isYouTubeUrl(q)) {
+      await reply("⬇️ Downloading video...");
 
-videoUrl = q.trim();
+      const data = await ytmp4(video.url, {
+        format: "mp4",
+        videoQuality: "360",
+      });
 
-const search = await yts(videoUrl);
-video = search.videos[0];
+      if (!data?.url) return reply("❌ Failed to download video");
 
-} else {
+      const stamp = Date.now();
+      rawFile = path.join(TEMP_DIR, `yt_raw_${stamp}.mp4`);
+      fixedFile = path.join(TEMP_DIR, `yt_fixed_${stamp}.mp4`);
 
-const search = await yts(q);
+      await reply("🛠 Converting video for phone support...");
 
-if (!search.videos.length) return reply("❌ No results found.");
+      await downloadFile(data.url, rawFile);
+      await reencodeForWhatsApp(rawFile, fixedFile);
 
-video = search.videos[0];
-videoUrl = video.url;
-
-}
-
-const title = video.title || "Unknown Title";
-const duration = video.timestamp || "0:00";
-const views = video.views ? video.views.toLocaleString() : "Unknown";
-const channel = video.author?.name || "Unknown";
-const uploaded = video.ago || "Unknown";
-const thumbnail = video.thumbnail;
-
-const progressBar = generateProgressBar(duration);
-
-await bot.sendMessage(from,{
-image:{url:thumbnail},
-caption:`🎥 *${title}*
-
-👤 *Channel:* ${channel}
-⏱ *Duration:* ${duration}
-👀 *Views:* ${views}
-📅 *Uploaded:* ${uploaded}
-
-${progressBar}
-
-🍀 *MALIYA-MD VIDEO DOWNLOADER* 🍀
-> QUALITY: AUTO 🎬`
-},{quoted:mek});
-
-await reply("⬇️ Downloading video...");
-
-const dl = await getDownload(videoUrl);
-
-if (!dl) return reply("❌ Failed to fetch download link.");
-
-await bot.sendMessage(from,{
-video:{url:dl},
-mimetype:"video/mp4",
-caption:`✅ *${title}*\n\n*MALIYA-MD ❤️*`
-},{quoted:mek});
-
-} catch(e){
-
-console.log(e);
-reply("❌ Error while downloading video: " + e.message);
-
-}
-
-});
+      await bot.sendMessage(
+        from,
+        {
+          video: fs.readFileSync(fixedFile),
+          mimetype: "video/mp4",
+          fileName: (data.filename || "youtube_video").replace(/\.[^/.]+$/, "") + "_fixed.mp4",
+          caption: `🎬 *${video.title}*\n\n*MALIYA-MD ❤️*`,
+          gifPlayback: false,
+        },
+        { quoted: mek }
+      );
+    } catch (e) {
+      console.log("YTMP4 ERROR:", e);
+      reply("❌ Error while downloading/converting video");
+    } finally {
+      safeUnlink(rawFile);
+      safeUnlink(fixedFile);
+    }
+  }
+);
