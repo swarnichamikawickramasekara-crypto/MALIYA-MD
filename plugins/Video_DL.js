@@ -1,6 +1,6 @@
 const { cmd } = require("../command");
-const DY_SCRAP = require("@dark-yasiya/scrap");
-const dy_scrap = new DY_SCRAP();
+const yts = require("yt-search");
+const ytdl = require("@distube/ytdl-core");
 
 function generateProgressBar(duration = "0:00") {
     const totalBars = 10;
@@ -10,36 +10,6 @@ function generateProgressBar(duration = "0:00") {
 
 function isYouTubeUrl(text = "") {
     return /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(text.trim());
-}
-
-async function tryVideoDownload(url) {
-    // normal ytmp4
-    try {
-        const res1 = await dy_scrap.ytmp4(url, 360);
-        console.log("ytmp4 response:", JSON.stringify(res1, null, 2));
-
-        const dl1 = res1?.result?.download?.url;
-        if (res1?.status && dl1) {
-            return { ok: true, url: dl1, method: "ytmp4" };
-        }
-    } catch (e) {
-        console.log("ytmp4 error:", e.message);
-    }
-
-    // fallback ytmp4_v2
-    try {
-        const res2 = await dy_scrap.ytmp4_v2(url, 360);
-        console.log("ytmp4_v2 response:", JSON.stringify(res2, null, 2));
-
-        const dl2 = res2?.result?.download?.url;
-        if (res2?.status && dl2) {
-            return { ok: true, url: dl2, method: "ytmp4_v2" };
-        }
-    } catch (e) {
-        console.log("ytmp4_v2 error:", e.message);
-    }
-
-    return { ok: false, url: null };
 }
 
 cmd(
@@ -62,45 +32,45 @@ cmd(
             if (isYouTubeUrl(q)) {
                 videoUrl = q.trim();
 
-                // optional metadata fetch through search
-                try {
-                    const directSearch = await dy_scrap.ytsearch(q.trim());
-                    video = directSearch?.results?.[0];
-                } catch (e) {
-                    console.log("direct ytsearch error:", e.message);
-                }
+                const info = await ytdl.getInfo(videoUrl);
+                const details = info.videoDetails;
 
-                if (!video) {
-                    video = {
-                        title: "YouTube Video",
-                        thumbnail: null,
-                        image: null,
-                        timestamp: "0:00",
-                        views: 0,
-                        ago: "Unknown",
-                        author: { name: "Unknown Channel" },
-                        url: videoUrl,
-                    };
-                }
+                video = {
+                    title: details.title || "Unknown Title",
+                    timestamp: details.lengthSeconds
+                        ? `${Math.floor(details.lengthSeconds / 60)}:${String(details.lengthSeconds % 60).padStart(2, "0")}`
+                        : "0:00",
+                    views: details.viewCount ? Number(details.viewCount) : 0,
+                    ago: details.publishDate || "Unknown",
+                    thumbnail: details.thumbnails?.[details.thumbnails.length - 1]?.url || null,
+                    author: { name: details.author?.name || "Unknown Channel" },
+                    url: videoUrl,
+                };
             } else {
-                const search = await dy_scrap.ytsearch(q);
-
-                if (!search?.results?.length) {
+                const search = await yts(q);
+                if (!search.videos || !search.videos.length) {
                     return reply("❌ No results found.");
                 }
 
-                video = search.results[0];
-                videoUrl = video?.url;
+                const v = search.videos[0];
+                video = {
+                    title: v.title,
+                    timestamp: v.timestamp || "0:00",
+                    views: v.views || 0,
+                    ago: v.ago || "Unknown",
+                    thumbnail: v.thumbnail || null,
+                    author: { name: v.author?.name || "Unknown Channel" },
+                    url: v.url,
+                };
+                videoUrl = v.url;
             }
 
-            if (!videoUrl) return reply("❌ Video URL not found.");
-
-            const title = video?.title || "Unknown Title";
-            const thumbnail = video?.thumbnail || video?.image || null;
-            const duration = video?.timestamp || "0:00";
-            const channel = video?.author?.name || "Unknown Channel";
-            const views = video?.views ? Number(video.views).toLocaleString() : "Unknown";
-            const uploaded = video?.ago || "Unknown";
+            const title = video.title || "Unknown Title";
+            const duration = video.timestamp || "0:00";
+            const channel = video.author?.name || "Unknown Channel";
+            const views = video.views ? Number(video.views).toLocaleString() : "Unknown";
+            const uploaded = video.ago || "Unknown";
+            const thumbnail = video.thumbnail || null;
             const progressBar = generateProgressBar(duration);
 
             if (thumbnail) {
@@ -126,22 +96,34 @@ ${progressBar}
 
             await reply("⬇️ Downloading video...");
 
-            const result = await tryVideoDownload(videoUrl);
+            const info = await ytdl.getInfo(videoUrl);
 
-            if (!result.ok || !result.url) {
-                return reply(
-                    "❌ Failed to fetch video download link.\n\n" +
-                    "Console log eka balanna.\n" +
-                    "Likely scrap backend issue ekak."
-                );
+            const formats = ytdl.filterFormats(info.formats, "videoandaudio")
+                .filter(f => f.container === "mp4" && f.hasVideo && f.hasAudio);
+
+            if (!formats.length) {
+                return reply("❌ No MP4 format found for this video.");
+            }
+
+            let chosen =
+                formats
+                    .filter(f => Number(f.height || 0) <= 360)
+                    .sort((a, b) => Number(b.height || 0) - Number(a.height || 0))[0];
+
+            if (!chosen) {
+                chosen = formats.sort((a, b) => Number(a.height || 9999) - Number(b.height || 9999))[0];
+            }
+
+            if (!chosen || !chosen.url) {
+                return reply("❌ Failed to get downloadable video format.");
             }
 
             await bot.sendMessage(
                 from,
                 {
-                    video: { url: result.url },
+                    video: { url: chosen.url },
                     mimetype: "video/mp4",
-                    caption: `✅ *${title}*\n\n*MALIYA-MD ❤️*\n> Source: ${result.method}`,
+                    caption: `✅ *${title}*\n\n*MALIYA-MD ❤️*`
                 },
                 { quoted: mek }
             );
