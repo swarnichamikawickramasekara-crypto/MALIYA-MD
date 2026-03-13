@@ -1,6 +1,6 @@
 const { cmd } = require("../command");
 const yts = require("yt-search");
-const ytdl = require("@distube/ytdl-core");
+const axios = require("axios");
 
 function generateProgressBar(duration = "0:00") {
     const totalBars = 10;
@@ -12,73 +12,62 @@ function isYouTubeUrl(text = "") {
     return /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(text.trim());
 }
 
+async function getDownload(url) {
+    const res = await axios.get(`https://api.vevioz.com/api/button/mp4/${encodeURIComponent(url)}`);
+    const match = res.data.match(/href="([^"]+)"[^>]*>Download MP4/);
+    if (!match) return null;
+    return match[1];
+}
+
 cmd(
-    {
-        pattern: "video",
-        alias: ["ytmp4", "vdl"],
-        react: "🎥",
-        category: "download",
-        filename: __filename,
-    },
-    async (bot, mek, m, { from, q, reply }) => {
-        try {
-            if (!q) return reply("🎥 Please provide a YouTube link or video name.");
+{
+pattern: "video",
+alias: ["ytmp4","vdl"],
+react: "🎥",
+category: "download",
+filename: __filename
+},
+async (bot, mek, m, { from, q, reply }) => {
 
-            await reply("🔍 Searching Video...");
+try {
 
-            let video;
-            let videoUrl;
+if (!q) return reply("🎥 Please provide a YouTube link or video name.");
 
-            if (isYouTubeUrl(q)) {
-                videoUrl = q.trim();
+await reply("🔍 Searching Video...");
 
-                const info = await ytdl.getInfo(videoUrl);
-                const details = info.videoDetails;
+let video;
+let videoUrl;
 
-                video = {
-                    title: details.title || "Unknown Title",
-                    timestamp: details.lengthSeconds
-                        ? `${Math.floor(details.lengthSeconds / 60)}:${String(details.lengthSeconds % 60).padStart(2, "0")}`
-                        : "0:00",
-                    views: details.viewCount ? Number(details.viewCount) : 0,
-                    ago: details.publishDate || "Unknown",
-                    thumbnail: details.thumbnails?.[details.thumbnails.length - 1]?.url || null,
-                    author: { name: details.author?.name || "Unknown Channel" },
-                    url: videoUrl,
-                };
-            } else {
-                const search = await yts(q);
-                if (!search.videos || !search.videos.length) {
-                    return reply("❌ No results found.");
-                }
+if (isYouTubeUrl(q)) {
 
-                const v = search.videos[0];
-                video = {
-                    title: v.title,
-                    timestamp: v.timestamp || "0:00",
-                    views: v.views || 0,
-                    ago: v.ago || "Unknown",
-                    thumbnail: v.thumbnail || null,
-                    author: { name: v.author?.name || "Unknown Channel" },
-                    url: v.url,
-                };
-                videoUrl = v.url;
-            }
+videoUrl = q.trim();
 
-            const title = video.title || "Unknown Title";
-            const duration = video.timestamp || "0:00";
-            const channel = video.author?.name || "Unknown Channel";
-            const views = video.views ? Number(video.views).toLocaleString() : "Unknown";
-            const uploaded = video.ago || "Unknown";
-            const thumbnail = video.thumbnail || null;
-            const progressBar = generateProgressBar(duration);
+const search = await yts(videoUrl);
+video = search.videos[0];
 
-            if (thumbnail) {
-                await bot.sendMessage(
-                    from,
-                    {
-                        image: { url: thumbnail },
-                        caption: `🎥 *${title}*
+} else {
+
+const search = await yts(q);
+
+if (!search.videos.length) return reply("❌ No results found.");
+
+video = search.videos[0];
+videoUrl = video.url;
+
+}
+
+const title = video.title || "Unknown Title";
+const duration = video.timestamp || "0:00";
+const views = video.views ? video.views.toLocaleString() : "Unknown";
+const channel = video.author?.name || "Unknown";
+const uploaded = video.ago || "Unknown";
+const thumbnail = video.thumbnail;
+
+const progressBar = generateProgressBar(duration);
+
+await bot.sendMessage(from,{
+image:{url:thumbnail},
+caption:`🎥 *${title}*
 
 👤 *Channel:* ${channel}
 ⏱ *Duration:* ${duration}
@@ -88,49 +77,26 @@ cmd(
 ${progressBar}
 
 🍀 *MALIYA-MD VIDEO DOWNLOADER* 🍀
-> QUALITY: 360P STABLE 🎬`
-                    },
-                    { quoted: mek }
-                );
-            }
+> QUALITY: AUTO 🎬`
+},{quoted:mek});
 
-            await reply("⬇️ Downloading video...");
+await reply("⬇️ Downloading video...");
 
-            const info = await ytdl.getInfo(videoUrl);
+const dl = await getDownload(videoUrl);
 
-            const formats = ytdl.filterFormats(info.formats, "videoandaudio")
-                .filter(f => f.container === "mp4" && f.hasVideo && f.hasAudio);
+if (!dl) return reply("❌ Failed to fetch download link.");
 
-            if (!formats.length) {
-                return reply("❌ No MP4 format found for this video.");
-            }
+await bot.sendMessage(from,{
+video:{url:dl},
+mimetype:"video/mp4",
+caption:`✅ *${title}*\n\n*MALIYA-MD ❤️*`
+},{quoted:mek});
 
-            let chosen =
-                formats
-                    .filter(f => Number(f.height || 0) <= 360)
-                    .sort((a, b) => Number(b.height || 0) - Number(a.height || 0))[0];
+} catch(e){
 
-            if (!chosen) {
-                chosen = formats.sort((a, b) => Number(a.height || 9999) - Number(b.height || 9999))[0];
-            }
+console.log(e);
+reply("❌ Error while downloading video: " + e.message);
 
-            if (!chosen || !chosen.url) {
-                return reply("❌ Failed to get downloadable video format.");
-            }
+}
 
-            await bot.sendMessage(
-                from,
-                {
-                    video: { url: chosen.url },
-                    mimetype: "video/mp4",
-                    caption: `✅ *${title}*\n\n*MALIYA-MD ❤️*`
-                },
-                { quoted: mek }
-            );
-
-        } catch (e) {
-            console.log("VIDEO CMD ERROR:", e);
-            return reply("❌ Error while downloading video: " + e.message);
-        }
-    }
-);
+});
