@@ -51,7 +51,8 @@
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
     "@dark-yasiya/scrap": "latest",
-    "@distube/ytdl-core": "latest"
+    "@distube/ytdl-core": "latest",
+    "youtube-dl-exec": "latest"
     
   }
 }
