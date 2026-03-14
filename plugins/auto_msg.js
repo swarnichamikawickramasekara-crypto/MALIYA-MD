@@ -4,22 +4,15 @@ const fs = require("fs");
 const path = require("path");
 
 // ========= ENV =========
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY2;
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
-
-if (!GEMINI_API_KEY) console.error("GEMINI_API_KEY2 is not set (auto_msg plugin)");
-if (!DEEPSEEK_API_KEY) console.error("DEEPSEEK_API_KEY is not set (auto_msg plugin)");
+const API_KEY = process.env.GEMINI_API_KEY2;
+if (!API_KEY) console.error("GEMINI_API_KEY2 is not set (auto_msg plugin)");
 
 // ========= MODELS =========
-const GEMINI_MODELS = [
+const MODEL_CANDIDATES = [
   "gemini-2.5-flash",
   "gemini-flash-latest",
   "gemini-2.5-pro",
   "gemini-pro-latest",
-];
-
-const DEEPSEEK_MODELS = [
-  "deepseek-chat",
 ];
 
 // ========= SETTINGS =========
@@ -119,17 +112,10 @@ function ensureBaseFiles() {
 ensureBaseFiles();
 console.log("AUTO_MSG DATA_DIR:", DATA_DIR);
 
-// ========= USER MESSAGES =========
 function rateLimitMsg(lang) {
   return lang === "si"
     ? "⏳ දැන් requests ටිකක් වැඩියි. ටිකක් පස්සේ ආයෙ try කරන්න.\n> MALIYA-MD ❤️"
     : "⏳ Too many requests right now. Please try again in a moment.\n> MALIYA-MD ❤️";
-}
-
-function serviceUnavailableMsg(lang) {
-  return lang === "si"
-    ? "❌ දැන් AI service දෙකම unavailable. ටිකක් පස්සේ ආයෙ try කරන්න.\n> MALIYA-MD ❤️"
-    : "❌ Both AI services are unavailable right now. Please try again later.\n> MALIYA-MD ❤️";
 }
 
 function helpText(lang) {
@@ -891,25 +877,13 @@ ${userText}
 `.trim();
 }
 
-// ========= AI CALLS =========
-function isRetriableGeminiError(status) {
-  return [429, 500, 502, 503, 504].includes(Number(status || 0));
-}
-
-function isRetriableDeepSeekError(status) {
-  return [402, 429, 500, 502, 503, 504].includes(Number(status || 0));
-}
-
-async function generateWithGemini(prompt) {
-  if (!GEMINI_API_KEY) {
-    const err = new Error("Missing GEMINI_API_KEY2");
-    err.provider = "gemini";
-    throw err;
-  }
+// ========= AI CALL =========
+async function generateText(prompt) {
+  if (!API_KEY) throw new Error("Missing GEMINI_API_KEY2");
 
   let lastErr = null;
 
-  for (const model of GEMINI_MODELS) {
+  for (const model of MODEL_CANDIDATES) {
     try {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
@@ -927,136 +901,23 @@ async function generateWithGemini(prompt) {
           timeout: 30000,
           headers: {
             "Content-Type": "application/json",
-            "x-goog-api-key": GEMINI_API_KEY,
+            "x-goog-api-key": API_KEY,
           },
         }
       );
 
       const out = res?.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-      if (out && out.length > 1) {
-        return {
-          text: out,
-          provider: "gemini",
-          model,
-        };
-      }
+      if (out && out.length > 1) return out;
 
-      lastErr = new Error(`Empty Gemini response from ${model}`);
+      lastErr = new Error("Empty response");
     } catch (e) {
-      const status = e?.response?.status;
       lastErr = e;
-
-      if (status === 404) continue;
-
-      if (isRetriableGeminiError(status)) {
-        e.provider = "gemini";
-        throw e;
-      }
-
-      e.provider = "gemini";
+      if (e?.response?.status === 404) continue;
       throw e;
     }
   }
 
-  if (lastErr) {
-    lastErr.provider = "gemini";
-    throw lastErr;
-  }
-
-  const err = new Error("Gemini failed");
-  err.provider = "gemini";
-  throw err;
-}
-
-async function generateWithDeepSeek(prompt) {
-  if (!DEEPSEEK_API_KEY) {
-    const err = new Error("Missing DEEPSEEK_API_KEY");
-    err.provider = "deepseek";
-    throw err;
-  }
-
-  let lastErr = null;
-
-  for (const model of DEEPSEEK_MODELS) {
-    try {
-      const res = await axios.post(
-        "https://api.deepseek.com/chat/completions",
-        {
-          model,
-          messages: [
-            {
-              role: "user",
-              content: prompt,
-            },
-          ],
-          temperature: 0.75,
-          top_p: 0.95,
-          max_tokens: 300,
-          stream: false,
-        },
-        {
-          timeout: 30000,
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${DEEPSEEK_API_KEY}`,
-          },
-        }
-      );
-
-      const out = res?.data?.choices?.[0]?.message?.content?.trim();
-      if (out && out.length > 1) {
-        return {
-          text: out,
-          provider: "deepseek",
-          model,
-        };
-      }
-
-      lastErr = new Error(`Empty DeepSeek response from ${model}`);
-    } catch (e) {
-      const status = e?.response?.status;
-      lastErr = e;
-
-      if (isRetriableDeepSeekError(status)) {
-        e.provider = "deepseek";
-        throw e;
-      }
-
-      e.provider = "deepseek";
-      throw e;
-    }
-  }
-
-  if (lastErr) {
-    lastErr.provider = "deepseek";
-    throw lastErr;
-  }
-
-  const err = new Error("DeepSeek failed");
-  err.provider = "deepseek";
-  throw err;
-}
-
-async function generateText(prompt) {
-  let geminiError = null;
-
-  try {
-    return await generateWithGemini(prompt);
-  } catch (e) {
-    geminiError = e;
-    console.log("GEMINI FAILED -> switching to DeepSeek:", e?.response?.status || "", e?.message || e);
-  }
-
-  try {
-    return await generateWithDeepSeek(prompt);
-  } catch (deepErr) {
-    console.log("DEEPSEEK FAILED:", deepErr?.response?.status || "", deepErr?.message || deepErr);
-
-    const finalErr = new Error("Both Gemini and DeepSeek failed");
-    finalErr.geminiError = geminiError;
-    finalErr.deepseekError = deepErr;
-    throw finalErr;
-  }
+  throw lastErr || new Error("AI error");
 }
 
 // ========= EXPORT / SUMMARY =========
@@ -1252,8 +1113,7 @@ async function onMessage(conn, mek, m, ctx = {}) {
       ? buildPromptWithContext(body, lang, from, ctxTurns)
       : buildPrompt(body, lang, from);
 
-    const result = await generateText(prompt);
-    const out = result?.text?.trim();
+    const out = await generateText(prompt);
 
     if (out) {
       await conn.sendMessage(from, { text: out }, { quoted: mek });
@@ -1266,20 +1126,14 @@ async function onMessage(conn, mek, m, ctx = {}) {
         role: "bot",
         text: out,
         ts: Date.now(),
-        meta: {
-          source: "api",
-          provider: result.provider || "unknown",
-          model: result.model || "unknown",
-        },
+        meta: { source: "api" },
       });
       updateProfile(from, "bot", out, lang);
     }
   } catch (e) {
-    const geminiStatus = e?.geminiError?.response?.status;
-    const deepseekStatus = e?.deepseekError?.response?.status;
-    const directStatus = e?.response?.status;
+    const status = e?.response?.status;
 
-    if (directStatus === 429) {
+    if (status === 429) {
       startBackoff();
       try {
         if (from && !String(from).endsWith("@g.us")) {
@@ -1290,21 +1144,7 @@ async function onMessage(conn, mek, m, ctx = {}) {
       return;
     }
 
-    if (geminiStatus || deepseekStatus) {
-      console.log(
-        "AUTO_MSG FALLBACK ERROR:",
-        "gemini =", geminiStatus || "-",
-        "deepseek =", deepseekStatus || "-"
-      );
-    } else {
-      console.log("AUTO_MSG ERROR:", directStatus || "", e?.message || e);
-    }
-
-    try {
-      if (from && !String(from).endsWith("@g.us")) {
-        await conn.sendMessage(from, { text: serviceUnavailableMsg(lang) }, { quoted: mek });
-      }
-    } catch {}
+    console.log("AUTO_MSG ERROR:", status || "", e?.message || e);
   } finally {
     if (from) busyChats.delete(from);
   }
