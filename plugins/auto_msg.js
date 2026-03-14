@@ -825,6 +825,7 @@ User detail ඉල්ලුවොත් complete reply දෙන්න.
 Unnecessary details දෙන්න එපා.
 Same phrases නැවත නැවත use කරන්න එපා.
 User style mimic කරන්න, හැබැයි over කරන්න එපා.
+ඔබ දෙන reply වලට reacts use කරන්න නමුත් අධික නොවන්න 
 
 User profile:
 - Preferred language: ${prof.lang}
@@ -850,6 +851,7 @@ If the user asks for details, give a complete answer.
 Match the user's style and tone without overdoing it.
 Avoid repeating the bot name.
 Avoid unnecessary details.
+Use reactions to your replies, but don't overdo it.
 
 User profile:
 - Preferred language: ${prof.lang}
