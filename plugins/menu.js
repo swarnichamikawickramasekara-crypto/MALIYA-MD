@@ -97,7 +97,7 @@ function normalizeText(s = "") {
     .toUpperCase();
 }
 
-function getCategoryReact(cat) {
+function getCategoryEmoji(cat) {
   const c = String(cat || "").toUpperCase();
 
   if (c.includes("DOWNLOAD")) return "📥";
@@ -120,7 +120,7 @@ function getCategoryReact(cat) {
   if (c.includes("CONVERT")) return "♻️";
   if (c.includes("UTILITY")) return "🧰";
 
-  return "📂";
+  return "✨";
 }
 
 function buildCommandMapCached() {
@@ -166,7 +166,8 @@ function menuHeader(userName = "User") {
 }
 
 function categoryInfoCaption(cat, list, userName = "User") {
-  const emo = getCategoryReact(cat);
+  const emo = getCategoryEmoji(cat);
+
   return `👋 HI ${userName}
 
 ┏━〔 ${emo} ${cat} MENU 〕━⬣
@@ -179,7 +180,7 @@ Select an option below.`;
 }
 
 function commandListCaption(cat, list, userName = "User") {
-  const emo = getCategoryReact(cat);
+  const emo = getCategoryEmoji(cat);
   let txt = `👋 HI ${userName}\n\n`;
   txt += `┏━〔 ${emo} ${cat} COMMANDS 〕━⬣\n`;
   txt += `┃ 📦 Total : ${list.length}\n`;
@@ -191,9 +192,7 @@ function commandListCaption(cat, list, userName = "User") {
     const aliases = (c.alias || []).filter(Boolean).map((a) => `${PREFIX}${a}`);
 
     txt += `• *${primary}*\n`;
-    if (aliases.length) {
-      txt += `   ◦ Aliases: ${aliases.join(", ")}\n`;
-    }
+    if (aliases.length) txt += `   ◦ Aliases: ${aliases.join(", ")}\n`;
     txt += `   ⭕ ${c.desc || "No description"}\n\n`;
   });
 
@@ -205,7 +204,7 @@ function commandListCaption(cat, list, userName = "User") {
 
 function makeCategoryRows(map, categories) {
   return categories.map((cat) => {
-    const emo = getCategoryReact(cat);
+    const emo = getCategoryEmoji(cat);
     return {
       title: `${emo} ${cat} MENU`,
       description: `${map[cat].length} commands available`,
@@ -215,7 +214,8 @@ function makeCategoryRows(map, categories) {
 }
 
 function makeRoleRows(cat) {
-  const emo = getCategoryReact(cat);
+  const emo = getCategoryEmoji(cat);
+
   return [
     {
       title: `${emo} ${cat} Commands`,
@@ -256,28 +256,14 @@ function resolveMenuAction(rawText, state) {
   }
 
   for (const cat of state.categories || []) {
-    const emo = normalizeText(getCategoryReact(cat));
-    const menuTitle1 = `${cat} MENU`;
-    const menuTitle2 = `${emo} ${cat} MENU`;
-    const commandsTitle1 = `${cat} COMMANDS`;
-    const commandsTitle2 = `${emo} ${cat} COMMANDS`;
+    const menuPlain = `${cat} MENU`;
+    const cmdPlain = `${cat} COMMANDS`;
 
-    if (
-      text.includes(menuTitle1) ||
-      text.includes(menuTitle2) ||
-      text === menuTitle1 ||
-      text === menuTitle2
-    ) {
+    if (text.includes(menuPlain)) {
       return { type: "category", cat };
     }
 
-    if (
-      text.includes(commandsTitle1) ||
-      text.includes(commandsTitle2) ||
-      text === commandsTitle1 ||
-      text === commandsTitle2 ||
-      text.includes("VIEW ALL COMMANDS")
-    ) {
+    if (text.includes(cmdPlain)) {
       return { type: "view", cat };
     }
   }
@@ -335,6 +321,8 @@ async function sendMainMenu(sock, from, mek, state, userName) {
 }
 
 async function sendCategoryMenu(sock, from, mek, cat, list, userName) {
+  const emo = getCategoryEmoji(cat);
+
   return sendInteractiveMessage(
     sock,
     from,
@@ -346,7 +334,7 @@ async function sendCategoryMenu(sock, from, mek, cat, list, userName) {
         {
           name: "single_select",
           buttonParamsJson: JSON.stringify({
-            title: `${getCategoryReact(cat)} ${cat} Roles ↯`,
+            title: `${emo} ${cat} Roles ↯`,
             sections: [
               {
                 title: `${cat} Options`,
@@ -407,7 +395,7 @@ cmd(
   }
 );
 
-/* ================= HANDLE MENU BUTTON IDS / VISIBLE TEXT ================= */
+/* ================= HANDLE MENU ACTIONS ================= */
 cmd(
   {
     filter: (text, { sender, from }) => {
@@ -418,17 +406,7 @@ cmd(
       const raw = String(text || "").trim();
       if (!raw) return false;
 
-      if (
-        raw.startsWith("menu_") ||
-        raw.includes("MENU") ||
-        raw.includes("Back To Main Menu") ||
-        raw.includes("Close Menu") ||
-        raw.includes("Commands")
-      ) {
-        return !!resolveMenuAction(raw, state);
-      }
-
-      return false;
+      return !!resolveMenuAction(raw, state);
     },
     dontAddCommandList: true,
     filename: __filename,
@@ -478,7 +456,7 @@ cmd(
         state.userName = userName;
 
         await sock.sendMessage(from, {
-          react: { text: getCategoryReact(cat), key: mek.key },
+          react: { text: getCategoryEmoji(cat), key: mek.key },
         });
 
         return sendCategoryMenu(sock, from, mek, cat, list, userName);
@@ -498,7 +476,7 @@ cmd(
         state.userName = userName;
 
         await sock.sendMessage(from, {
-          react: { text: getCategoryReact(cat), key: mek.key },
+          react: { text: getCategoryEmoji(cat), key: mek.key },
         });
 
         return sendCommandsList(sock, from, mek, cat, list, userName);
@@ -510,10 +488,71 @@ cmd(
   }
 );
 
+/* ================= FALLBACK FOR VISIBLE TEXT REPLIES ================= */
+/* WhatsApp selected row text ekak witharak enawa nam meken catch karanawa */
+cmd(
+  {
+    filter: (text, { sender, from }) => {
+      const k = keyFor(sender, from);
+      const state = pendingMenu[k];
+      if (!state) return false;
+
+      const raw = normalizeText(text || "");
+      if (!raw) return false;
+
+      for (const cat of state.categories || []) {
+        if (raw.includes(`${cat} COMMANDS`)) return true;
+      }
+
+      return false;
+    },
+    dontAddCommandList: true,
+    filename: __filename,
+  },
+  async (sock, mek, m, { body, from, sender, pushname, reply }) => {
+    try {
+      const k = keyFor(sender, from);
+      const state = pendingMenu[k];
+
+      if (!state) return;
+
+      const raw = normalizeText(body || "");
+      const userName = state.userName || getUserName(pushname, m, mek, sender);
+
+      let matchedCat = null;
+
+      for (const cat of state.categories || []) {
+        if (raw.includes(`${cat} COMMANDS`)) {
+          matchedCat = cat;
+          break;
+        }
+      }
+
+      if (!matchedCat) return;
+
+      const list = state.map[matchedCat] || [];
+      if (!list.length) return reply("❌ No commands found in this category.");
+
+      state.step = "command_view";
+      state.selectedCategory = matchedCat;
+      state.timestamp = Date.now();
+      state.userName = userName;
+
+      await sock.sendMessage(from, {
+        react: { text: getCategoryEmoji(matchedCat), key: mek.key },
+      });
+
+      return sendCommandsList(sock, from, mek, matchedCat, list, userName);
+    } catch (e) {
+      console.log("MENU FALLBACK ERROR:", e);
+    }
+  }
+);
+
 /* ================= AUTO CLEANUP ================= */
 setInterval(() => {
   const now = Date.now();
-  const timeout = 2 * 60 * 1000; // 2 minutes
+  const timeout = 2 * 60 * 1000;
 
   for (const k of Object.keys(pendingMenu)) {
     if (now - pendingMenu[k].timestamp > timeout) {
