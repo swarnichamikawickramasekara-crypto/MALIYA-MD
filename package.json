@@ -57,7 +57,8 @@
     "@ffprobe-installer/ffprobe": "latest",
     "sharp": "latest",
     "tesseract.js": "latest",
-    "pdf-parse": "latest"
+    "pdf-parse": "latest",
+    "gifted-btns": "latest"
     
   }
 }
