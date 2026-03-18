@@ -239,6 +239,7 @@ function resolveMenuAction(rawText, state) {
   const text = normalizeText(rawText || "");
   if (!text) return null;
 
+  // ID based
   if (text.startsWith("MENU_CAT:")) {
     return { type: "category", cat: text.replace("MENU_CAT:", "").trim() };
   }
@@ -247,34 +248,24 @@ function resolveMenuAction(rawText, state) {
     return { type: "view", cat: text.replace("MENU_VIEW:", "").trim() };
   }
 
-  if (text === "MENU_BACK:MAIN") {
-    return { type: "back" };
-  }
+  if (text === "MENU_BACK:MAIN") return { type: "back" };
+  if (text === "MENU_CLOSE:NOW") return { type: "close" };
 
-  if (text === "MENU_CLOSE:NOW") {
-    return { type: "close" };
-  }
-
+  // Visible text based
   for (const cat of state.categories || []) {
-    const menuPlain = `${cat} MENU`;
-    const cmdPlain = `${cat} COMMANDS`;
+    const cleanCat = normalizeText(cat);
 
-    if (text.includes(menuPlain)) {
+    if (text.includes(`${cleanCat} MENU`)) {
       return { type: "category", cat };
     }
 
-    if (text.includes(cmdPlain)) {
+    if (text.includes(`${cleanCat} COMMANDS`)) {
       return { type: "view", cat };
     }
   }
 
-  if (text.includes("BACK TO MAIN MENU")) {
-    return { type: "back" };
-  }
-
-  if (text.includes("CLOSE MENU")) {
-    return { type: "close" };
-  }
+  if (text.includes("BACK TO MAIN MENU")) return { type: "back" };
+  if (text.includes("CLOSE MENU")) return { type: "close" };
 
   return null;
 }
@@ -304,7 +295,7 @@ async function sendMainMenu(sock, from, mek, state, userName) {
           name: "cta_url",
           buttonParamsJson: JSON.stringify({
             display_text: "🌐 Official Website",
-            url: "https://example.com",
+            url: "https://web-pair--sithmikavihara8.replit.app",
           }),
         },
         {
@@ -384,6 +375,7 @@ cmd(
         map,
         categories,
         userName,
+        selectedCategory: null,
         timestamp: Date.now(),
       };
 
@@ -435,6 +427,7 @@ cmd(
 
       if (action.type === "back") {
         state.step = "main";
+        state.selectedCategory = null;
         state.timestamp = Date.now();
         state.userName = userName;
 
@@ -444,8 +437,13 @@ cmd(
 
       if (action.type === "category") {
         const cat = action.cat;
-        const list = state.map[cat] || [];
 
+        // duplicate loop stop
+        if (state.selectedCategory === cat && state.step === "category") {
+          return;
+        }
+
+        const list = state.map[cat] || [];
         if (!list.length) {
           return reply("❌ No commands found in this category.");
         }
@@ -484,67 +482,6 @@ cmd(
     } catch (e) {
       console.log("MENU ACTION ERROR:", e);
       reply("❌ Menu action eka process karanna බැරි වුණා.");
-    }
-  }
-);
-
-/* ================= FALLBACK FOR VISIBLE TEXT REPLIES ================= */
-/* WhatsApp selected row text ekak witharak enawa nam meken catch karanawa */
-cmd(
-  {
-    filter: (text, { sender, from }) => {
-      const k = keyFor(sender, from);
-      const state = pendingMenu[k];
-      if (!state) return false;
-
-      const raw = normalizeText(text || "");
-      if (!raw) return false;
-
-      for (const cat of state.categories || []) {
-        if (raw.includes(`${cat} COMMANDS`)) return true;
-      }
-
-      return false;
-    },
-    dontAddCommandList: true,
-    filename: __filename,
-  },
-  async (sock, mek, m, { body, from, sender, pushname, reply }) => {
-    try {
-      const k = keyFor(sender, from);
-      const state = pendingMenu[k];
-
-      if (!state) return;
-
-      const raw = normalizeText(body || "");
-      const userName = state.userName || getUserName(pushname, m, mek, sender);
-
-      let matchedCat = null;
-
-      for (const cat of state.categories || []) {
-        if (raw.includes(`${cat} COMMANDS`)) {
-          matchedCat = cat;
-          break;
-        }
-      }
-
-      if (!matchedCat) return;
-
-      const list = state.map[matchedCat] || [];
-      if (!list.length) return reply("❌ No commands found in this category.");
-
-      state.step = "command_view";
-      state.selectedCategory = matchedCat;
-      state.timestamp = Date.now();
-      state.userName = userName;
-
-      await sock.sendMessage(from, {
-        react: { text: getCategoryEmoji(matchedCat), key: mek.key },
-      });
-
-      return sendCommandsList(sock, from, mek, matchedCat, list, userName);
-    } catch (e) {
-      console.log("MENU FALLBACK ERROR:", e);
     }
   }
 );
