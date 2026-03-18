@@ -45,13 +45,12 @@ async function getYoutube(query) {
   }
 
   const search = await yts(query);
+  if (!search.videos.length) return null;
   return search.videos[0];
 }
 
 function generateProgressBar(duration = "0:00") {
-  const totalBars = 10;
-  const bar = "─".repeat(totalBars);
-  return `*00:00* ${bar}○ *${duration}*`;
+  return `*00:00* ──────────◉ *${duration}*`;
 }
 
 function makeTempFile(ext = ".mp3") {
@@ -162,48 +161,80 @@ function extractSongTypeFromTexts(texts) {
     if (text.includes("SONGTYPE:DOCUMENT")) return "document";
     if (text.includes("SONGTYPE:VOICE")) return "voice";
 
+    if (text === "AUDIO" || text.includes("AUDIO")) return "audio";
+    if (text === "DOCUMENT" || text.includes("DOCUMENT")) return "document";
+    if (text === "VOICE" || text.includes("VOICE NOTE") || text.includes("VOICE"))
+      return "voice";
+
     if (text === "1") return "audio";
     if (text === "2") return "document";
     if (text === "3") return "voice";
-
-    if (text.includes("AUDIO")) return "audio";
-    if (text.includes("DOCUMENT")) return "document";
-    if (text.includes("VOICE")) return "voice";
   }
 
   return null;
 }
 
 function buildSongDetails(video) {
+  const title = video.title || "Unknown Title";
+  const channel = video.author?.name || "Unknown Channel";
   const duration = video.timestamp || "0:00";
-  const progressBar = generateProgressBar(duration);
+  const views = formatViews(video.views);
+  const uploaded = video.ago || "Unknown";
+  const url = video.url || "Unavailable";
 
-  return `🎵 *${video.title || "Unknown Title"}*
+  return `🎵 *${title}*
 
 ╭━━━〔 🎧 SONG DETAILS 〕━━━╮
-👤 *Channel:* ${video.author?.name || "Unknown Channel"}
+👤 *Channel:* ${channel}
 ⏱️ *Duration:* ${duration}
-👀 *Views:* ${formatViews(video.views)}
-📅 *Uploaded:* ${video.ago || "Unknown"}
-🔗 *Link:* ${video.url || "Unavailable"}
+👀 *Views:* ${views}
+📅 *Uploaded:* ${uploaded}
+🔗 *Link:* ${url}
 ╰━━━━━━━━━━━━━━━╯
 
-${progressBar}
+${generateProgressBar(duration)}
 
 🍀 *ENJOY YOUR SONG* 🍀
 > USE HEADPHONES FOR THE BEST EXPERIENCE 🎧`;
 }
 
-function getSongTypeLabel(type) {
-  switch (String(type).toLowerCase()) {
+function getSongTypeLabel(choice) {
+  switch (String(choice).trim().toLowerCase()) {
+    case "1":
     case "audio":
+    case "songtype:audio":
       return "Audio";
+    case "2":
     case "document":
+    case "songtype:document":
       return "Document";
+    case "3":
     case "voice":
+    case "voicenote":
+    case "songtype:voice":
       return "Voice Note";
     default:
       return "Unknown";
+  }
+}
+
+function getSongTypeFromChoice(choice) {
+  switch (String(choice).trim().toLowerCase()) {
+    case "1":
+    case "audio":
+    case "songtype:audio":
+      return "audio";
+    case "2":
+    case "document":
+    case "songtype:document":
+      return "document";
+    case "3":
+    case "voice":
+    case "voicenote":
+    case "songtype:voice":
+      return "voice";
+    default:
+      return null;
   }
 }
 
@@ -219,10 +250,10 @@ async function sendSongInteractiveMenu(sock, from, mek, video) {
         {
           name: "single_select",
           buttonParamsJson: JSON.stringify({
-            title: "Select Song Type ↯",
+            title: "Select Type ↯",
             sections: [
               {
-                title: "Audio Formats",
+                title: "Song Download Types",
                 rows: [
                   {
                     title: "🎵 Audio",
@@ -231,12 +262,12 @@ async function sendSongInteractiveMenu(sock, from, mek, video) {
                   },
                   {
                     title: "📄 Document",
-                    description: "Send as mp3 file document",
+                    description: "Send as MP3 document",
                     id: "songtype:document",
                   },
                   {
                     title: "🎙 Voice Note",
-                    description: "Send as PTT voice note",
+                    description: "Send as voice note",
                     id: "songtype:voice",
                   },
                 ],
@@ -250,7 +281,7 @@ async function sendSongInteractiveMenu(sock, from, mek, video) {
   );
 }
 
-function isDuplicateAction(state, type) {
+function isDuplicateSongAction(state, type) {
   const now = Date.now();
   const sig = `songtype:${type}`;
 
@@ -263,28 +294,30 @@ function isDuplicateAction(state, type) {
   return false;
 }
 
-async function handleSongTypeDownload(sock, mek, from, sender, reply, typeRaw) {
+async function handleSongTypeDownload(sock, mek, from, sender, reply, choiceRaw) {
   const key = makePendingKey(sender, from);
   const pending = pendingSongType[key];
   if (!pending) return;
 
-  const type = String(typeRaw || "").toLowerCase();
-  if (!["audio", "document", "voice"].includes(type)) return;
+  const type = getSongTypeFromChoice(choiceRaw);
+  const typeLabel = getSongTypeLabel(choiceRaw);
+
+  if (!type) return;
 
   if (pending.isProcessing) return;
-  if (isDuplicateAction(pending, type)) return;
+  if (isDuplicateSongAction(pending, type)) return;
 
   pending.isProcessing = true;
 
   let filePath = null;
 
   try {
-    await reply(`⬇️ Downloading song as *${getSongTypeLabel(type)}*from MALIYA-MD...`);
+    await reply(`⬇️ Downloading *${typeLabel}*...`);
 
     const data = await ytmp3(pending.video.url);
     if (!data?.url) {
       delete pendingSongType[key];
-      return reply("❌ Failed to download song.");
+      return reply("❌ Failed to download selected song.");
     }
 
     filePath = makeTempFile(".mp3");
@@ -292,24 +325,14 @@ async function handleSongTypeDownload(sock, mek, from, sender, reply, typeRaw) {
 
     const cleanTitle = sanitizeFileName(pending.video.title);
 
-    if (type === "audio") {
-      await sock.sendMessage(
-        from,
-        {
-          audio: fs.readFileSync(filePath),
-          mimetype: "audio/mpeg",
-          fileName: `${cleanTitle}.mp3`,
-        },
-        { quoted: mek }
-      );
-    } else if (type === "document") {
+    if (type === "document") {
       await sock.sendMessage(
         from,
         {
           document: fs.readFileSync(filePath),
           mimetype: "audio/mpeg",
           fileName: `${cleanTitle}.mp3`,
-          caption: `🎵 *${pending.video.title || "Unknown Title"}*\n\n✅ Sent as document.`,
+          caption: `🎵 *${pending.video.title || "Unknown Title"}*\n📦 Type: Document`,
         },
         { quoted: mek }
       );
@@ -318,8 +341,18 @@ async function handleSongTypeDownload(sock, mek, from, sender, reply, typeRaw) {
         from,
         {
           audio: fs.readFileSync(filePath),
-          mimetype: "audio/ogg; codecs=opus",
+          mimetype: "audio/mpeg",
           ptt: true,
+        },
+        { quoted: mek }
+      );
+    } else {
+      await sock.sendMessage(
+        from,
+        {
+          audio: fs.readFileSync(filePath),
+          mimetype: "audio/mpeg",
+          fileName: `${cleanTitle}.mp3`,
         },
         { quoted: mek }
       );
@@ -328,7 +361,7 @@ async function handleSongTypeDownload(sock, mek, from, sender, reply, typeRaw) {
     delete pendingSongType[key];
   } catch (e) {
     console.log("SONG TYPE ERROR:", e);
-    reply("❌ Error while downloading song.");
+    reply("❌ Error while downloading selected song.");
     delete pendingSongType[key];
   } finally {
     safeUnlink(filePath);
@@ -392,11 +425,10 @@ replyHandlers.push({
     let type = extractSongTypeFromTexts(texts);
 
     if (!type && /^[1-3]$/.test(String(body || "").trim())) {
-      const map = { 1: "audio", 2: "document", 3: "voice" };
-      type = map[String(body).trim()];
+      type = getSongTypeFromChoice(body);
     }
 
-    if (!type) return;
+    if (!type) return; // unrelated message ignore
 
     return handleSongTypeDownload(sock, mek, from, sender, reply, type);
   },
