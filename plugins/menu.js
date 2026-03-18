@@ -54,7 +54,7 @@ function getUserName(pushname, m, mek, sender = "") {
   ];
 
   for (const item of candidates) {
-    if (item && String(item).trim() && !/^\+?\d+$/.test(String(item).trim())) {
+    if (item && String(item).trim()) {
       return String(item).trim();
     }
   }
@@ -165,20 +165,6 @@ function menuHeader(userName = "User") {
 🎀 Select a Command List Below`;
 }
 
-function categoryInfoCaption(cat, list, userName = "User") {
-  const emo = getCategoryEmoji(cat);
-
-  return `👋 HI ${userName}
-
-┏━〔 ${emo} ${cat} MENU 〕━⬣
-┃ 📦 Total Commands : ${list.length}
-┃ ✨ Prefix         : ${PREFIX}
-┃ 👑 Owner          : ${OWNER_NUMBER}
-┗━━━━━━━━━━━━⬣
-
-Select an option below.`;
-}
-
 function commandListCaption(cat, list, userName = "User") {
   const emo = getCategoryEmoji(cat);
   let txt = `👋 HI ${userName}\n\n`;
@@ -208,66 +194,116 @@ function makeCategoryRows(map, categories) {
     return {
       title: `${emo} ${cat} MENU`,
       description: `${map[cat].length} commands available`,
-      id: `menu_cat:${cat}`,
+      id: `menu_view:${cat}`, // ✅ direct view
     };
   });
 }
 
-function makeRoleRows(cat) {
-  const emo = getCategoryEmoji(cat);
+function walkStringsDeep(value, out = []) {
+  if (value == null) return out;
 
-  return [
-    {
-      title: `${emo} ${cat} Commands`,
-      description: "View all commands with aliases and descriptions",
-      id: `menu_view:${cat}`,
-    },
-    {
-      title: "🏠 Back To Main Menu",
-      description: "Return to the main menu",
-      id: `menu_back:main`,
-    },
-    {
-      title: "❌ Close Menu",
-      description: "Close this menu session",
-      id: `menu_close:now`,
-    },
-  ];
+  if (typeof value === "string") {
+    out.push(value);
+    return out;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) walkStringsDeep(item, out);
+    return out;
+  }
+
+  if (typeof value === "object") {
+    for (const k of Object.keys(value)) {
+      walkStringsDeep(value[k], out);
+    }
+  }
+
+  return out;
 }
 
-function resolveMenuAction(rawText, state) {
-  const text = normalizeText(rawText || "");
-  if (!text) return null;
+function tryParseJsonString(s) {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
 
-  // ID based
-  if (text.startsWith("MENU_CAT:")) {
-    return { type: "category", cat: text.replace("MENU_CAT:", "").trim() };
+function extractSelectionText(body, mek, m) {
+  const collected = [];
+
+  if (body) collected.push(String(body));
+  if (m?.body) collected.push(String(m.body));
+  if (m?.text) collected.push(String(m.text));
+  if (m?.message) walkStringsDeep(m.message, collected);
+  if (mek?.message) walkStringsDeep(mek.message, collected);
+
+  const nativeParams =
+    mek?.message?.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson ||
+    m?.message?.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson;
+
+  if (nativeParams) {
+    collected.push(String(nativeParams));
+    const parsed = tryParseJsonString(nativeParams);
+    if (parsed) walkStringsDeep(parsed, collected);
   }
 
-  if (text.startsWith("MENU_VIEW:")) {
-    return { type: "view", cat: text.replace("MENU_VIEW:", "").trim() };
-  }
+  const uniq = [...new Set(collected.map((x) => String(x).trim()).filter(Boolean))];
+  return uniq;
+}
 
-  if (text === "MENU_BACK:MAIN") return { type: "back" };
-  if (text === "MENU_CLOSE:NOW") return { type: "close" };
+function resolveMenuActionFromTexts(texts, state) {
+  const normalized = texts.map((t) => normalizeText(t)).filter(Boolean);
 
-  // Visible text based
-  for (const cat of state.categories || []) {
-    const cleanCat = normalizeText(cat);
-
-    if (text.includes(`${cleanCat} MENU`)) {
-      return { type: "category", cat };
+  for (const text of normalized) {
+    if (text.startsWith("MENU_VIEW:")) {
+      return { type: "view", cat: text.replace("MENU_VIEW:", "").trim(), raw: text };
     }
 
-    if (text.includes(`${cleanCat} COMMANDS`)) {
-      return { type: "view", cat };
+    if (text.startsWith("MENU_BACK:MAIN")) {
+      return { type: "back", raw: text };
+    }
+
+    if (text.startsWith("MENU_CLOSE:NOW")) {
+      return { type: "close", raw: text };
+    }
+
+    for (const cat of state.categories || []) {
+      const catText = normalizeText(cat);
+
+      if (
+        text.includes(`${catText} MENU`) ||
+        text === `${catText} MENU` ||
+        text.includes(`${catText} COMMANDS`) ||
+        text === `${catText} COMMANDS`
+      ) {
+        return { type: "view", cat, raw: text };
+      }
+    }
+
+    if (text.includes("BACK TO MAIN MENU")) {
+      return { type: "back", raw: text };
+    }
+
+    if (text.includes("CLOSE MENU")) {
+      return { type: "close", raw: text };
     }
   }
-
-  if (text.includes("BACK TO MAIN MENU")) return { type: "back" };
-  if (text.includes("CLOSE MENU")) return { type: "close" };
 
   return null;
+}
+
+function isDuplicateAction(state, action) {
+  const now = Date.now();
+  const sig = `${action.type}:${action.cat || ""}:${action.raw || ""}`;
+
+  if (state.lastActionSig === sig && now - (state.lastActionAt || 0) < 2500) {
+    return true;
+  }
+
+  state.lastActionSig = sig;
+  state.lastActionAt = now;
+  return false;
 }
 
 async function sendMainMenu(sock, from, mek, state, userName) {
@@ -295,7 +331,7 @@ async function sendMainMenu(sock, from, mek, state, userName) {
           name: "cta_url",
           buttonParamsJson: JSON.stringify({
             display_text: "🌐 Official Website",
-            url: "https://web-pair--sithmikavihara8.replit.app",
+            url: "https://example.com",
           }),
         },
         {
@@ -303,35 +339,6 @@ async function sendMainMenu(sock, from, mek, state, userName) {
           buttonParamsJson: JSON.stringify({
             display_text: "📋 Copy Owner Number",
             copy_code: OWNER_NUMBER,
-          }),
-        },
-      ],
-    },
-    { quoted: mek }
-  );
-}
-
-async function sendCategoryMenu(sock, from, mek, cat, list, userName) {
-  const emo = getCategoryEmoji(cat);
-
-  return sendInteractiveMessage(
-    sock,
-    from,
-    {
-      image: { url: headerImage },
-      text: categoryInfoCaption(cat, list, userName),
-      footer: `${BOT_NAME} | ${cat} MENU`,
-      interactiveButtons: [
-        {
-          name: "single_select",
-          buttonParamsJson: JSON.stringify({
-            title: `${emo} ${cat} Roles ↯`,
-            sections: [
-              {
-                title: `${cat} Options`,
-                rows: makeRoleRows(cat),
-              },
-            ],
           }),
         },
       ],
@@ -375,8 +382,9 @@ cmd(
         map,
         categories,
         userName,
-        selectedCategory: null,
         timestamp: Date.now(),
+        lastActionSig: "",
+        lastActionAt: 0,
       };
 
       await sendMainMenu(sock, from, mek, pendingMenu[k], userName);
@@ -390,15 +398,9 @@ cmd(
 /* ================= HANDLE MENU ACTIONS ================= */
 cmd(
   {
-    filter: (text, { sender, from }) => {
+    filter: (_text, { sender, from }) => {
       const k = keyFor(sender, from);
-      const state = pendingMenu[k];
-      if (!state) return false;
-
-      const raw = String(text || "").trim();
-      if (!raw) return false;
-
-      return !!resolveMenuAction(raw, state);
+      return !!pendingMenu[k]; // ✅ always listen while menu session active
     },
     dontAddCommandList: true,
     filename: __filename,
@@ -407,17 +409,18 @@ cmd(
     try {
       const k = keyFor(sender, from);
       const state = pendingMenu[k];
+      if (!state) return;
 
-      if (!state) {
-        return reply("⚠️ Menu session expired. Please send *.menu* again.");
-      }
+      const texts = extractSelectionText(body, mek, m);
+      const action = resolveMenuActionFromTexts(texts, state);
+
+      if (!action) return; // unrelated msg නම් ignore
+
+      if (isDuplicateAction(state, action)) return;
 
       const userName = state.userName || getUserName(pushname, m, mek, sender);
-      const action = resolveMenuAction(body, state);
-
-      if (!action) {
-        return reply("⚠️ Invalid menu selection. Please use the menu buttons.");
-      }
+      state.userName = userName;
+      state.timestamp = Date.now();
 
       if (action.type === "close") {
         delete pendingMenu[k];
@@ -426,52 +429,17 @@ cmd(
       }
 
       if (action.type === "back") {
-        state.step = "main";
-        state.selectedCategory = null;
-        state.timestamp = Date.now();
-        state.userName = userName;
-
         await sock.sendMessage(from, { react: { text: "↩️", key: mek.key } });
         return sendMainMenu(sock, from, mek, state, userName);
       }
 
-      if (action.type === "category") {
-        const cat = action.cat;
-
-        // duplicate loop stop
-        if (state.selectedCategory === cat && state.step === "category") {
-          return;
-        }
-
-        const list = state.map[cat] || [];
-        if (!list.length) {
-          return reply("❌ No commands found in this category.");
-        }
-
-        state.step = "category";
-        state.selectedCategory = cat;
-        state.timestamp = Date.now();
-        state.userName = userName;
-
-        await sock.sendMessage(from, {
-          react: { text: getCategoryEmoji(cat), key: mek.key },
-        });
-
-        return sendCategoryMenu(sock, from, mek, cat, list, userName);
-      }
-
       if (action.type === "view") {
-        const cat = action.cat || state.selectedCategory;
+        const cat = action.cat;
         const list = state.map[cat] || [];
 
         if (!list.length) {
           return reply("❌ No commands found in this category.");
         }
-
-        state.step = "command_view";
-        state.selectedCategory = cat;
-        state.timestamp = Date.now();
-        state.userName = userName;
 
         await sock.sendMessage(from, {
           react: { text: getCategoryEmoji(cat), key: mek.key },
@@ -481,7 +449,6 @@ cmd(
       }
     } catch (e) {
       console.log("MENU ACTION ERROR:", e);
-      reply("❌ Menu action eka process karanna බැරි වුණා.");
     }
   }
 );
