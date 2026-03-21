@@ -1,6 +1,7 @@
-// index.js (FULL CODE) ✅ Status Auto Seen + React FIXED (Baileys latest) + Cmd Auto-Fix (CONFIRM PLUGIN)
-// ------------------------------------------------------------
-
+// This si main file of MALIYA-MD bot 
+// Do not edit or delete any files with permission or without permission
+// Contact owner: 94702135392
+// ©️2026 MALIYA-MD
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -16,11 +17,32 @@ const fs = require("fs");
 const P = require("pino");
 const express = require("express");
 const path = require("path");
+const { execSync } = require("child_process");
 
 const config = require("./config");
 const { sms } = require("./lib/msg");
 const { File } = require("megajs");
 const { commands, replyHandlers } = require("./command");
+
+function ensurePluginsRepo() {
+  try {
+    const pluginsPath = path.join(__dirname, "plugins");
+
+    if (!fs.existsSync(pluginsPath)) {
+      execSync("git clone https://github.com/Maliya-bro/my-plugins.git plugins", {
+        stdio: "ignore",
+      });
+    } else {
+      execSync("git -C plugins pull", {
+        stdio: "ignore",
+      });
+    }
+  } catch (e) {
+    console.log("Plugin repo setup failed:", e?.message || e);
+  }
+}
+
+ensurePluginsRepo();
 
 // ✅ auto msg plugin
 const autoMsgPlugin = require("./plugins/auto_msg.js");
