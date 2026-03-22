@@ -31,7 +31,7 @@ function convertToBool(text, fault = "true") {
 
 module.exports = {
   SESSION_ID:
-    process.env.SESSION_ID || "PthwjJjA#Yokq5WKpBIu28pAgFrEezbv5aYQa8v1yyh_xR-PKWN4", // replace with your session ID
+    process.env.SESSION_ID || "GlwxVZTK#VQfSeK4lnbsnXBbwyRTxBz46FTKwqelIph9AxMSJvtk", // replace with your session ID
   ALIVE_IMG:
     process.env.ALIVE_IMG || "https://github.com/Maliya-bro/MALIYA-MD/blob/main/images/WhatsApp%20Image%202026-01-18%20at%2012.37.23.jpeg?raw=true",
  ALIVE_MSG:
